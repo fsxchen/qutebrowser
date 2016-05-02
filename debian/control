@@ -1,0 +1,25 @@
+Source: qutebrowser
+Section: misc
+Priority: extra
+Maintainer: Mateusz Łukasik <mati75@linuxmint.pl>
+Build-Depends: debhelper (>= 9), python3-all (>= 3.4), pyqt5-dev (>= 5.2),
+ python3-sip-dev, python3-setuptools, python3-yaml, python3-pygments,
+ python3-jinja2, tox, python3-pypeg2, asciidoc, source-highlight,
+ libxml2-utils, docbook-xml, xsltproc
+X-Python3-Version: >= 3.4
+Standards-Version: 3.9.8
+Homepage: http://www.qutebrowser.org
+Vcs-Browser: https://github.com/mati75/qutebrowser
+Vcs-Git: https://github.com/mati75/qutebrowser
+
+Package: qutebrowser
+Architecture: all
+Depends: ${misc:Depends}, ${python3:Depends}, desktop-file-utils, hicolor-icon-theme,
+ python3-pyqt5, python3-pyqt5.qtwebkit
+Recommends: python3-colorama, python3-cssutils
+Description: Keyboard-driven, vim-like browser based on PyQt5 and QtWebKit
+ qutebrowser is a keyboard-focused browser with a minimal GUI. It iss based
+ on Python, PyQt5 and QtWebKit and free software, licensed under the GPL.
+ .
+ It was inspired by other browsers/addons like dwb and Vimperator/Pentadactyl.
+

@@ -1,0 +1,10 @@
+qutebrowser.desktop usr/share/applications
+icons/qutebrowser.svg usr/share/icons/hicolor/scalable/apps
+icons/qutebrowser-16x16.png usr/share/icons/hicolor/16x16/apps/qutebrowser.png
+icons/qutebrowser-24x24.png usr/share/icons/hicolor/24x24/apps/qutebrowser.png
+icons/qutebrowser-32x32.png usr/share/icons/hicolor/32x32/apps/qutebrowser.png
+icons/qutebrowser-48x48.png usr/share/icons/hicolor/48x48/apps/qutebrowser.png
+icons/qutebrowser-64x64.png usr/share/icons/hicolor/64x64/apps/qutebrowser.png
+icons/qutebrowser-128x128.png usr/share/icons/hicolor/128x128/apps/qutebrowser.png
+icons/qutebrowser-256x256.png usr/share/icons/hicolor/256x256/apps/qutebrowser.png
+icons/qutebrowser-512x512.png usr/share/icons/hicolor/512x512/apps/qutebrowser.png
