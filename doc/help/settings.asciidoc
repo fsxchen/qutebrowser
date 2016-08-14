@@ -5,7 +5,6 @@
 |==============
 |Setting|Description
 |<<general-ignore-case,ignore-case>>|Whether to find text on a page case-insensitively.
-|<<general-wrap-search,wrap-search>>|Whether to wrap finding text to the top when arriving at the end.
 |<<general-startpage,startpage>>|The default page(s) to open at the start, separated by commas.
 |<<general-default-page,default-page>>|The page to open if :open -t/-b/-w is used without URL. Use `about:blank` for a blank page.
 |<<general-auto-search,auto-search>>|Whether to start a search when something else than a URL is entered.
@@ -33,10 +32,10 @@
 |<<ui-zoom-levels,zoom-levels>>|The available zoom levels, separated by commas.
 |<<ui-default-zoom,default-zoom>>|The default zoom level.
 |<<ui-downloads-position,downloads-position>>|Where to show the downloaded files.
+|<<ui-status-position,status-position>>|The position of the status bar.
 |<<ui-message-timeout,message-timeout>>|Time (in ms) to show messages in the statusbar for.
 |<<ui-message-unfocused,message-unfocused>>|Whether to show messages in unfocused windows.
 |<<ui-confirm-quit,confirm-quit>>|Whether to confirm quitting the application.
-|<<ui-display-statusbar-messages,display-statusbar-messages>>|Whether to display javascript statusbar messages.
 |<<ui-zoom-text-only,zoom-text-only>>|Whether the zoom factor on a frame applies only to the text or to all content.
 |<<ui-frame-flattening,frame-flattening>>|Whether to  expand each subframe to its contents.
 |<<ui-user-stylesheet,user-stylesheet>>|User stylesheet to use (absolute filename, filename relative to the config directory or CSS string). Will expand environment variables.
@@ -49,6 +48,7 @@
 |<<ui-hide-mouse-cursor,hide-mouse-cursor>>|Whether to hide the mouse cursor.
 |<<ui-modal-js-dialog,modal-js-dialog>>|Use standard JavaScript modal dialog for alert() and confirm()
 |<<ui-hide-wayland-decoration,hide-wayland-decoration>>|Hide the window decoration when using wayland (requires restart)
+|<<ui-keyhint-blacklist,keyhint-blacklist>>|Keychains that shouldn't be shown in the keyhint dialog
 |==============
 
 .Quick reference for section ``network''
@@ -63,6 +63,7 @@
 |<<network-proxy-dns-requests,proxy-dns-requests>>|Whether to send DNS requests over the configured proxy.
 |<<network-ssl-strict,ssl-strict>>|Whether to validate SSL handshakes.
 |<<network-dns-prefetch,dns-prefetch>>|Whether to try to pre-fetch DNS entries to speed up browsing.
+|<<network-custom-headers,custom-headers>>|Set custom headers for qutebrowser HTTP requests.
 |==============
 
 .Quick reference for section ``completion''
@@ -177,12 +178,14 @@
 |<<hints-mode,mode>>|Mode to use for hints.
 |<<hints-chars,chars>>|Chars used for hint strings.
 |<<hints-min-chars,min-chars>>|Minimum number of chars used for hint strings.
-|<<hints-scatter,scatter>>|Whether to scatter hint key chains (like Vimium) or not (like dwb).
+|<<hints-scatter,scatter>>|Whether to scatter hint key chains (like Vimium) or not (like dwb). Ignored for number hints.
 |<<hints-uppercase,uppercase>>|Make chars in hint strings uppercase.
 |<<hints-dictionary,dictionary>>|The dictionary file to be used by the word hints.
 |<<hints-auto-follow,auto-follow>>|Follow a hint immediately when the hint text is completely matched.
+|<<hints-auto-follow-timeout,auto-follow-timeout>>|A timeout to inhibit normal-mode key bindings after a successfulauto-follow.
 |<<hints-next-regexes,next-regexes>>|A comma-separated list of regexes to use for 'next' links.
 |<<hints-prev-regexes,prev-regexes>>|A comma-separated list of regexes to use for 'prev' links.
+|<<hints-find-implementation,find-implementation>>|Which implementation to use to find elements to hint.
 |==============
 
 .Quick reference for section ``colors''
@@ -252,6 +255,9 @@
 |<<colors-downloads.fg.error,downloads.fg.error>>|Foreground color for downloads with errors.
 |<<colors-downloads.bg.error,downloads.bg.error>>|Background color for downloads with errors.
 |<<colors-webpage.bg,webpage.bg>>|Background color for webpages if unset (or empty to use the theme's color)
+|<<colors-keyhint.fg,keyhint.fg>>|Text color for the keyhint widget.
+|<<colors-keyhint.fg.suffix,keyhint.fg.suffix>>|Highlight color for keys to complete the current keychain
+|<<colors-keyhint.bg,keyhint.bg>>|Background color of the keyhint widget.
 |==============
 
 .Quick reference for section ``fonts''
@@ -275,6 +281,7 @@
 |<<fonts-web-size-minimum-logical,web-size-minimum-logical>>|The minimum logical font size that is applied when zooming out.
 |<<fonts-web-size-default,web-size-default>>|The default font size for regular text.
 |<<fonts-web-size-default-fixed,web-size-default-fixed>>|The default font size for fixed-pitch text.
+|<<fonts-keyhint,keyhint>>|Font used in the keyhint widget.
 |==============
 
 == general
@@ -291,17 +298,6 @@ Valid values:
  * +smart+: Search case-sensitively if there are capital chars
 
 Default: +pass:[smart]+
-
-[[general-wrap-search]]
-=== wrap-search
-Whether to wrap finding text to the top when arriving at the end.
-
-Valid values:
-
- * +true+
- * +false+
-
-Default: +pass:[true]+
 
 [[general-startpage]]
 === startpage
@@ -508,6 +504,17 @@ Valid values:
 
 Default: +pass:[top]+
 
+[[ui-status-position]]
+=== status-position
+The position of the status bar.
+
+Valid values:
+
+ * +top+
+ * +bottom+
+
+Default: +pass:[bottom]+
+
 [[ui-message-timeout]]
 === message-timeout
 Time (in ms) to show messages in the statusbar for.
@@ -537,17 +544,6 @@ Valid values:
  * +never+: Never show a confirmation.
 
 Default: +pass:[never]+
-
-[[ui-display-statusbar-messages]]
-=== display-statusbar-messages
-Whether to display javascript statusbar messages.
-
-Valid values:
-
- * +true+
- * +false+
-
-Default: +pass:[false]+
 
 [[ui-zoom-text-only]]
 === zoom-text-only
@@ -629,6 +625,7 @@ The format to use for the window title. The following placeholders are defined:
 * `{title_sep}`: The string ` - ` if a title is set, empty otherwise.
 * `{id}`: The internal window ID of this window.
 * `{scroll_pos}`: The page scroll position.
+* `{host}`: The host of the current web page.
 
 Default: +pass:[{perc}{title}{title_sep}qutebrowser]+
 
@@ -664,6 +661,14 @@ Valid values:
  * +false+
 
 Default: +pass:[false]+
+
+[[ui-keyhint-blacklist]]
+=== keyhint-blacklist
+Keychains that shouldn't be shown in the keyhint dialog
+
+Globs are supported, so ';*' will blacklist all keychainsstarting with ';'. Use '*' to disable keyhints
+
+Default: empty
 
 == network
 Settings related to the network.
@@ -749,6 +754,12 @@ Valid values:
  * +false+
 
 Default: +pass:[true]+
+
+[[network-custom-headers]]
+=== custom-headers
+Set custom headers for qutebrowser HTTP requests.
+
+Default: empty
 
 == completion
 Options related to completion and command history.
@@ -856,13 +867,17 @@ Options related to input modes.
 === timeout
 Timeout for ambiguous key bindings.
 
+If the current input forms both a complete match and a partial match, the complete match will be executed after this time.
+
 Default: +pass:[500]+
 
 [[input-partial-timeout]]
 === partial-timeout
 Timeout for partially typed key bindings.
 
-Default: +pass:[1000]+
+If the current input forms only partial matches, the keystring will be cleared after this time.
+
+Default: +pass:[5000]+
 
 [[input-insert-mode-on-plugins]]
 === insert-mode-on-plugins
@@ -1127,6 +1142,7 @@ The format to use for the tab title. The following placeholders are defined:
 * `{index}`: The index of this tab.
 * `{id}`: The internal tab ID of this tab.
 * `{scroll_pos}`: The page scroll position.
+* `{host}`: The host of the current web page.
 
 Default: +pass:[{index}: {title}]+
 
@@ -1321,7 +1337,7 @@ Valid values:
  * +true+
  * +false+
 
-Default: +pass:[true]+
+Default: +pass:[false]+
 
 [[content-css-regions]]
 === css-regions
@@ -1557,7 +1573,7 @@ Default: +pass:[1]+
 
 [[hints-scatter]]
 === scatter
-Whether to scatter hint key chains (like Vimium) or not (like dwb).
+Whether to scatter hint key chains (like Vimium) or not (like dwb). Ignored for number hints.
 
 Valid values:
 
@@ -1594,6 +1610,12 @@ Valid values:
 
 Default: +pass:[true]+
 
+[[hints-auto-follow-timeout]]
+=== auto-follow-timeout
+A timeout to inhibit normal-mode key bindings after a successfulauto-follow.
+
+Default: +pass:[0]+
+
 [[hints-next-regexes]]
 === next-regexes
 A comma-separated list of regexes to use for 'next' links.
@@ -1605,6 +1627,17 @@ Default: +pass:[\bnext\b,\bmore\b,\bnewer\b,\b[&gt;→≫]\b,\b(&gt;&gt;|»)\b,\
 A comma-separated list of regexes to use for 'prev' links.
 
 Default: +pass:[\bprev(ious)?\b,\bback\b,\bolder\b,\b[&lt;←≪]\b,\b(&lt;&lt;|«)\b]+
+
+[[hints-find-implementation]]
+=== find-implementation
+Which implementation to use to find elements to hint.
+
+Valid values:
+
+ * +javascript+: Better but slower
+ * +python+: Slightly worse but faster
+
+Default: +pass:[javascript]+
 
 == searchengines
 Definitions of search engines which can be used via the address bar.
@@ -1621,7 +1654,7 @@ Colors used in the UI.
 A value can be in one of the following format:
 
  * `#RGB`/`#RRGGBB`/`#RRRGGGBBB`/`#RRRRGGGGBBBB`
- * A SVG color name as specified in http://www.w3.org/TR/SVG/types.html#ColorKeywords[the W3C specification].
+ * An SVG color name as specified in http://www.w3.org/TR/SVG/types.html#ColorKeywords[the W3C specification].
  * transparent (no color)
  * `rgb(r, g, b)` / `rgba(r, g, b, a)` (values 0-255 or percentages)
  * `hsv(h, s, v)` / `hsva(h, s, v, a)` (values 0-255, hue 0-359)
@@ -2030,6 +2063,24 @@ Background color for webpages if unset (or empty to use the theme's color)
 
 Default: +pass:[white]+
 
+[[colors-keyhint.fg]]
+=== keyhint.fg
+Text color for the keyhint widget.
+
+Default: +pass:[#FFFFFF]+
+
+[[colors-keyhint.fg.suffix]]
+=== keyhint.fg.suffix
+Highlight color for keys to complete the current keychain
+
+Default: +pass:[#FFFF00]+
+
+[[colors-keyhint.bg]]
+=== keyhint.bg
+Background color of the keyhint widget.
+
+Default: +pass:[rgba(0, 0, 0, 80%)]+
+
 == fonts
 Fonts used for the UI, with optional style/weight/size.
 
@@ -2138,3 +2189,9 @@ Default: empty
 The default font size for fixed-pitch text.
 
 Default: empty
+
+[[fonts-keyhint]]
+=== keyhint
+Font used in the keyhint widget.
+
+Default: +pass:[8pt ${_monospace}]+

@@ -29,7 +29,8 @@ from PyQt5.QtCore import pyqtSlot, pyqtSignal, Qt, QItemSelectionModel
 from qutebrowser.config import config, style
 from qutebrowser.completion import completiondelegate, completer
 from qutebrowser.completion.models import base
-from qutebrowser.utils import qtutils, objreg, utils
+from qutebrowser.utils import qtutils, objreg, utils, usertypes
+from qutebrowser.commands import cmdexc, cmdutils
 
 
 class CompletionView(QTreeView):
@@ -201,8 +202,7 @@ class CompletionView(QTreeView):
         idx = self._next_idx(prev)
         qtutils.ensure_valid(idx)
         self.selectionModel().setCurrentIndex(
-            idx, QItemSelectionModel.ClearAndSelect |
-            QItemSelectionModel.Rows)
+            idx, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
 
     def set_model(self, model):
         """Switch completion to a new model.
@@ -278,3 +278,14 @@ class CompletionView(QTreeView):
         if scrollbar is not None:
             scrollbar.setValue(scrollbar.minimum())
         super().showEvent(e)
+
+    @cmdutils.register(instance='completion', hide=True,
+                       modes=[usertypes.KeyMode.command], scope='window')
+    def completion_item_del(self):
+        """Delete the current completion item."""
+        if not self.currentIndex().isValid():
+            raise cmdexc.CommandError("No item selected!")
+        try:
+            self.model().srcmodel.delete_cur_item(self)
+        except NotImplementedError:
+            raise cmdexc.CommandError("Cannot delete this item.")

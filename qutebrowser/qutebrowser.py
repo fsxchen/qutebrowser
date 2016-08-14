@@ -69,6 +69,10 @@ def get_argparser():
                         'tab-silent', 'tab-bg-silent', 'window'],
                         help="How URLs should be opened if there is already a "
                              "qutebrowser instance running.")
+    parser.add_argument('--backend', choices=['webkit', 'webengine'],
+                        help="Which backend to use (webengine backend is "
+                             "EXPERIMENTAL!).", default='webkit')
+
     parser.add_argument('--json-args', help=argparse.SUPPRESS)
     parser.add_argument('--temp-basedir-restarted', help=argparse.SUPPRESS)
 
@@ -86,8 +90,12 @@ def get_argparser():
                        default=2000, type=int)
     debug.add_argument('--debug', help="Turn on debugging options.",
                        action='store_true')
+    debug.add_argument('--json-logging', action='store_true', help="Output log"
+                       " lines in JSON format (one object per line).")
     debug.add_argument('--nocolor', help="Turn off colored logging.",
                        action='store_false', dest='color')
+    debug.add_argument('--force-color', help="Force colored logging",
+                       action='store_true')
     debug.add_argument('--harfbuzz', choices=['old', 'new', 'system', 'auto'],
                        default='auto', help="HarfBuzz engine version to use. "
                        "Default: auto.")

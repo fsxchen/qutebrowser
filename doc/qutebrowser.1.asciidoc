@@ -65,6 +65,9 @@ show it.
 *--target* '{auto,tab,tab-bg,tab-silent,tab-bg-silent,window}'::
     How URLs should be opened if there is already a qutebrowser instance running.
 
+*--backend* '{webkit,webengine}'::
+    Which backend to use (webengine backend is EXPERIMENTAL!).
+
 === debug arguments
 *-l* '{critical,error,warning,info,debug,vdebug}', *--loglevel* '{critical,error,warning,info,debug,vdebug}'::
     Set loglevel
@@ -78,8 +81,14 @@ show it.
 *--debug*::
     Turn on debugging options.
 
+*--json-logging*::
+    Output log lines in JSON format (one object per line).
+
 *--nocolor*::
     Turn off colored logging.
+
+*--force-color*::
+    Force colored logging
 
 *--harfbuzz* '{old,new,system,auto}'::
     HarfBuzz engine version to use. Default: auto.

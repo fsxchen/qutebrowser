@@ -8,7 +8,7 @@
 |<<adblock-update,adblock-update>>|Update the adblock block lists.
 |<<back,back>>|Go back in the history of the current tab.
 |<<bind,bind>>|Bind a key to a command.
-|<<bookmark-add,bookmark-add>>|Save the current page as a bookmark.
+|<<bookmark-add,bookmark-add>>|Save the current page as a bookmark, or a specific url.
 |<<bookmark-del,bookmark-del>>|Delete a bookmark.
 |<<bookmark-load,bookmark-load>>|Load a bookmark.
 |<<buffer,buffer>>|Select tab by index or url/title best match.
@@ -20,15 +20,19 @@
 |<<download-open,download-open>>|Open the last/[count]th download.
 |<<download-remove,download-remove>>|Remove the last/[count]th download from the list.
 |<<download-retry,download-retry>>|Retry the first failed/[count]th download.
+|<<edit-url,edit-url>>|Navigate to a url formed in an external editor.
 |<<fake-key,fake-key>>|Send a fake keypress or key string to the website or qutebrowser.
 |<<forward,forward>>|Go forward in the history of the current tab.
 |<<fullscreen,fullscreen>>|Toggle fullscreen mode.
 |<<help,help>>|Show help about a command or setting.
 |<<hint,hint>>|Start hinting.
+|<<history-clear,history-clear>>|Clear all browsing history.
 |<<home,home>>|Open main startpage in current tab.
 |<<inspector,inspector>>|Toggle the web inspector.
 |<<jseval,jseval>>|Evaluate a JavaScript string.
+|<<jump-mark,jump-mark>>|Jump to the mark named by `key`.
 |<<later,later>>|Execute a command after some time.
+|<<messages,messages>>|Show a log of past messages.
 |<<navigate,navigate>>|Open typical prev/next links or navigate using the URL path.
 |<<open,open>>|Open a URL in the current/[count]th tab.
 |<<paste,paste>>|Open a page from the clipboard.
@@ -49,6 +53,7 @@
 |<<session-save,session-save>>|Save a session.
 |<<set,set>>|Set an option.
 |<<set-cmd-text,set-cmd-text>>|Preset the statusbar to some text.
+|<<set-mark,set-mark>>|Set a mark at the current scroll position in the current tab.
 |<<spawn,spawn>>|Spawn a command in a shell.
 |<<stop,stop>>|Stop loading in the current/[count]th tab.
 |<<tab-clone,tab-clone>>|Duplicate the current tab.
@@ -91,13 +96,14 @@ How many pages to go back.
 
 [[bind]]
 === bind
-Syntax: +:bind [*--mode* 'MODE'] [*--force*] 'key' 'command'+
+Syntax: +:bind [*--mode* 'mode'] [*--force*] 'key' ['command']+
 
 Bind a key to a command.
 
 ==== positional arguments
 * +'key'+: The keychain or special key (inside `<...>`) to bind.
-* +'command'+: The command to execute, with optional args.
+* +'command'+: The command to execute, with optional args, or not given to print the current binding.
+
 
 ==== optional arguments
 * +*-m*+, +*--mode*+: A comma-separated list of modes to bind the key in (default: `normal`).
@@ -110,20 +116,28 @@ Bind a key to a command.
 
 [[bookmark-add]]
 === bookmark-add
-Save the current page as a bookmark.
+Syntax: +:bookmark-add ['url'] ['title']+
+
+Save the current page as a bookmark, or a specific url.
+
+If no url and title are provided, then save the current page as a bookmark. If a url and title have been provided, then save the given url as a bookmark with the provided title. You can view all saved bookmarks on the link:qute://bookmarks[bookmarks page].
+
+==== positional arguments
+* +'url'+: url to save as a bookmark. If None, use url of current page.
+* +'title'+: title of the new bookmark.
 
 [[bookmark-del]]
 === bookmark-del
-Syntax: +:bookmark-del 'url'+
+Syntax: +:bookmark-del ['url']+
 
 Delete a bookmark.
 
 ==== positional arguments
-* +'url'+: The URL of the bookmark to delete.
+* +'url'+: The url of the bookmark to delete. If not given, use the current page's url.
+
 
 ==== note
 * This command does not split arguments after the last argument and handles quotes literally.
-* With this command, +;;+ is interpreted literally instead of splitting off a second command.
 
 [[bookmark-load]]
 === bookmark-load
@@ -141,7 +155,6 @@ Load a bookmark.
 
 ==== note
 * This command does not split arguments after the last argument and handles quotes literally.
-* With this command, +;;+ is interpreted literally instead of splitting off a second command.
 
 [[buffer]]
 === buffer
@@ -161,7 +174,7 @@ Close the current window.
 
 [[download]]
 === download
-Syntax: +:download [*--mhtml*] [*--dest* 'DEST'] ['url'] ['dest-old']+
+Syntax: +:download [*--mhtml*] [*--dest* 'dest'] ['url'] ['dest-old']+
 
 Download a given URL, or current page if no URL given.
 
@@ -222,6 +235,22 @@ Retry the first failed/[count]th download.
 
 ==== count
 The index of the download to retry.
+
+[[edit-url]]
+=== edit-url
+Syntax: +:edit-url [*--bg*] [*--tab*] [*--window*] ['url']+
+
+Navigate to a url formed in an external editor.
+
+The editor which should be launched can be configured via the `general -> editor` config option.
+
+==== positional arguments
+* +'url'+: URL to edit; defaults to the current page url.
+
+==== optional arguments
+* +*-b*+, +*--bg*+: Open in a new background tab.
+* +*-t*+, +*--tab*+: Open in a new tab.
+* +*-w*+, +*--window*+: Open in a new window.
 
 [[fake-key]]
 === fake-key
@@ -285,6 +314,7 @@ Start hinting.
  - `all`: All clickable elements.
  - `links`: Only links.
  - `images`: Only images.
+ - `inputs`: Only input fields.
  
 
 
@@ -331,6 +361,15 @@ Start hinting.
  `window`, `run`, `hover`, `userscript` and `spawn`.
 
 
+==== note
+* This command does not split arguments after the last argument and handles quotes literally.
+
+[[history-clear]]
+=== history-clear
+Clear all browsing history.
+
+Note this only clears the global history (e.g. `~/.local/share/qutebrowser/history` on Linux) but not cookies, the back/forward history of a tab, cache or other persistent data.
+
 [[home]]
 === home
 Open main startpage in current tab.
@@ -357,6 +396,15 @@ Evaluate a JavaScript string.
 * This command does not split arguments after the last argument and handles quotes literally.
 * With this command, +;;+ is interpreted literally instead of splitting off a second command.
 
+[[jump-mark]]
+=== jump-mark
+Syntax: +:jump-mark 'key'+
+
+Jump to the mark named by `key`.
+
+==== positional arguments
+* +'key'+: mark identifier; capital indicates a global mark
+
 [[later]]
 === later
 Syntax: +:later 'ms' 'command'+
@@ -370,6 +418,22 @@ Execute a command after some time.
 ==== note
 * This command does not split arguments after the last argument and handles quotes literally.
 * With this command, +;;+ is interpreted literally instead of splitting off a second command.
+
+[[messages]]
+=== messages
+Syntax: +:messages [*--plain*] [*--tab*] [*--bg*] [*--window*] ['level']+
+
+Show a log of past messages.
+
+==== positional arguments
+* +'level'+: Include messages with `level` or higher severity. Valid values: vdebug, debug, info, warning, error, critical.
+
+
+==== optional arguments
+* +*-p*+, +*--plain*+: Whether to show plaintext (as opposed to html).
+* +*-t*+, +*--tab*+: Open in a new tab.
+* +*-b*+, +*--bg*+: Open in a background tab.
+* +*-w*+, +*--window*+: Open in a new window.
 
 [[navigate]]
 === navigate
@@ -415,7 +479,6 @@ The tab index to open the URL in.
 
 ==== note
 * This command does not split arguments after the last argument and handles quotes literally.
-* With this command, +;;+ is interpreted literally instead of splitting off a second command.
 
 [[paste]]
 === paste
@@ -433,12 +496,13 @@ If the pasted text contains newlines, each line gets opened in its own tab.
 
 [[print]]
 === print
-Syntax: +:print [*--preview*]+
+Syntax: +:print [*--preview*] [*--pdf* 'file']+
 
 Print the current/[count]th tab.
 
 ==== optional arguments
 * +*-p*+, +*--preview*+: Show preview instead of printing.
+* +*-f*+, +*--pdf*+: The file path to write the PDF to.
 
 ==== count
 The tab index to print.
@@ -449,22 +513,25 @@ Syntax: +:quickmark-add 'url' 'name'+
 
 Add a new quickmark.
 
+You can view all saved quickmarks on the link:qute://bookmarks[bookmarks page].
+
 ==== positional arguments
 * +'url'+: The url to add as quickmark.
 * +'name'+: The name for the new quickmark.
 
 [[quickmark-del]]
 === quickmark-del
-Syntax: +:quickmark-del 'name'+
+Syntax: +:quickmark-del ['name']+
 
 Delete a quickmark.
 
 ==== positional arguments
-* +'name'+: The name of the quickmark to delete.
+* +'name'+: The name of the quickmark to delete. If not given, delete the quickmark for the current page (choosing one arbitrarily
+ if there are more than one).
+
 
 ==== note
 * This command does not split arguments after the last argument and handles quotes literally.
-* With this command, +;;+ is interpreted literally instead of splitting off a second command.
 
 [[quickmark-load]]
 === quickmark-load
@@ -482,7 +549,6 @@ Load a quickmark.
 
 ==== note
 * This command does not split arguments after the last argument and handles quotes literally.
-* With this command, +;;+ is interpreted literally instead of splitting off a second command.
 
 [[quickmark-save]]
 === quickmark-save
@@ -550,7 +616,6 @@ Search for a text on the current page. With no text, clear results.
 
 ==== note
 * This command does not split arguments after the last argument and handles quotes literally.
-* With this command, +;;+ is interpreted literally instead of splitting off a second command.
 
 [[session-delete]]
 === session-delete
@@ -618,6 +683,8 @@ Syntax: +:set-cmd-text [*--space*] [*--append*] 'text'+
 
 Preset the statusbar to some text.
 
+You can use the `{url}` and `{url:pretty}` variables here which will get replaced by the encoded/decoded URL.
+
 ==== positional arguments
 * +'text'+: The commandline to set.
 
@@ -627,7 +694,15 @@ Preset the statusbar to some text.
 
 ==== note
 * This command does not split arguments after the last argument and handles quotes literally.
-* With this command, +;;+ is interpreted literally instead of splitting off a second command.
+
+[[set-mark]]
+=== set-mark
+Syntax: +:set-mark 'key'+
+
+Set a mark at the current scroll position in the current tab.
+
+==== positional arguments
+* +'key'+: mark identifier; capital indicates a global mark
 
 [[spawn]]
 === spawn
@@ -635,7 +710,7 @@ Syntax: +:spawn [*--userscript*] [*--verbose*] [*--detach*] 'cmdline'+
 
 Spawn a command in a shell.
 
-Note the {url} variable which gets replaced by the current URL might be useful here.
+Note the `{url}` and `{url:pretty}` variables might be useful here. `{url}` gets replaced by the URL in fully encoded format and `{url:pretty}` uses a "pretty form" with most percent-encoded characters decoded.
 
 ==== positional arguments
 * +'cmdline'+: The commandline to execute.
@@ -652,7 +727,6 @@ Note the {url} variable which gets replaced by the current URL might be useful h
 
 ==== note
 * This command does not split arguments after the last argument and handles quotes literally.
-* With this command, +;;+ is interpreted literally instead of splitting off a second command.
 
 [[stop]]
 === stop
@@ -699,7 +773,8 @@ Select the tab given as argument/[count].
 If neither count nor index are given, it behaves like tab-next.
 
 ==== positional arguments
-* +'index'+: The tab index to focus, starting with 1. The special value `last` focuses the last focused tab.
+* +'index'+: The tab index to focus, starting with 1. The special value `last` focuses the last focused tab. Negative indexes
+ counts from the end, such that -1 is the last tab.
 
 
 ==== count
@@ -773,7 +848,7 @@ Save open pages and quit.
 
 [[yank]]
 === yank
-Syntax: +:yank [*--title*] [*--sel*] [*--domain*]+
+Syntax: +:yank [*--title*] [*--sel*] [*--domain*] [*--pretty*]+
 
 Yank the current URL/title to the clipboard or primary selection.
 
@@ -781,6 +856,7 @@ Yank the current URL/title to the clipboard or primary selection.
 * +*-t*+, +*--title*+: Yank the title instead of the URL.
 * +*-s*+, +*--sel*+: Use the primary selection instead of the clipboard.
 * +*-d*+, +*--domain*+: Yank only the scheme, domain, and port number.
+* +*-p*+, +*--pretty*+: Yank the URL in pretty decoded form.
 
 [[yank-selected]]
 === yank-selected
@@ -860,7 +936,9 @@ How many steps to zoom out.
 |<<paste-primary,paste-primary>>|Paste the primary selection at cursor position.
 |<<prompt-accept,prompt-accept>>|Accept the current prompt.
 |<<prompt-no,prompt-no>>|Answer no to a yes/no prompt.
+|<<prompt-open-download,prompt-open-download>>|Immediately open a download.
 |<<prompt-yes,prompt-yes>>|Answer yes to a yes/no prompt.
+|<<repeat-command,repeat-command>>|Repeat the last executed command.
 |<<rl-backward-char,rl-backward-char>>|Move back a character.
 |<<rl-backward-delete-char,rl-backward-delete-char>>|Delete the character before the cursor.
 |<<rl-backward-word,rl-backward-word>>|Move back to the start of the current or previous word.
@@ -1083,9 +1161,20 @@ Accept the current prompt.
 === prompt-no
 Answer no to a yes/no prompt.
 
+[[prompt-open-download]]
+=== prompt-open-download
+Immediately open a download.
+
 [[prompt-yes]]
 === prompt-yes
 Answer yes to a yes/no prompt.
+
+[[repeat-command]]
+=== repeat-command
+Repeat the last executed command.
+
+==== count
+Which count to pass the command.
 
 [[rl-backward-char]]
 === rl-backward-char
@@ -1222,7 +1311,7 @@ Scroll the current tab by 'count * dx/dy' pixels.
 
 ==== positional arguments
 * +'dx'+: How much to scroll in x-direction.
-* +'dy'+: How much to scroll in x-direction.
+* +'dy'+: How much to scroll in y-direction.
 
 ==== count
 multiplier

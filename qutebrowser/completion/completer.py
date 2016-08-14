@@ -22,7 +22,7 @@
 from PyQt5.QtCore import pyqtSignal, pyqtSlot, QObject, QTimer
 
 from qutebrowser.config import config
-from qutebrowser.commands import cmdexc, cmdutils, runners
+from qutebrowser.commands import cmdutils, runners
 from qutebrowser.utils import usertypes, log, objreg, utils
 from qutebrowser.completion.models import instances, sortfilter
 
@@ -204,6 +204,8 @@ class Completer(QObject):
         parts, cursor_part = self._filter_cmdline_parts(parts, cursor_part)
         log.completion.debug("After filtering flags: parts {}, cursor_part "
                              "{}".format(parts, cursor_part))
+        if not parts:
+            return None
         if cursor_part == 0:
             # '|' or 'set|'
             model = instances.get(usertypes.Completion.command)
@@ -352,7 +354,7 @@ class Completer(QObject):
         if completion.enabled:
             completion.show()
 
-    def split(self, keep=False, aliases=False):
+    def split(self, keep=False):
         """Get the text split up in parts.
 
         Args:
@@ -369,7 +371,7 @@ class Completer(QObject):
             # the whitespace.
             return [text]
         runner = runners.CommandRunner(self._win_id)
-        result = runner.parse(text, fallback=True, aliases=aliases, keep=keep)
+        result = runner.parse(text, fallback=True, keep=keep)
         parts = result.cmdline
         if self._empty_item_idx is not None:
             log.completion.debug("Empty element queued at {}, "
@@ -483,16 +485,3 @@ class Completer(QObject):
         """Select the next completion item."""
         self._open_completion_if_needed()
         self.next_prev_item.emit(False)
-
-    @cmdutils.register(instance='completion', hide=True,
-                       modes=[usertypes.KeyMode.command], scope='window')
-    def completion_item_del(self):
-        """Delete the current completion item."""
-        completion = objreg.get('completion', scope='window',
-                                window=self._win_id)
-        if not completion.currentIndex().isValid():
-            raise cmdexc.CommandError("No item selected!")
-        try:
-            self.model().srcmodel.delete_cur_item(completion)
-        except NotImplementedError:
-            raise cmdexc.CommandError("Cannot delete this item.")

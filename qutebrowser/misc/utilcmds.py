@@ -28,7 +28,7 @@ try:
 except ImportError:
     hunter = None
 
-from qutebrowser.browser.network import qutescheme
+from qutebrowser.browser.webkit.network import qutescheme
 from qutebrowser.utils import log, objreg, usertypes, message, debug, utils
 from qutebrowser.commands import cmdutils, runners, cmdexc
 from qutebrowser.config import style
@@ -39,8 +39,9 @@ from PyQt5.QtCore import QUrl
 from PyQt5.QtWidgets import QApplication  # pylint: disable=unused-import
 
 
-@cmdutils.register(maxsplit=1, no_cmd_split=True, win_id='win_id')
-def later(ms: {'type': int}, command, win_id):
+@cmdutils.register(maxsplit=1, no_cmd_split=True)
+@cmdutils.argument('win_id', win_id=True)
+def later(ms: int, command, win_id):
     """Execute a command after some time.
 
     Args:
@@ -68,8 +69,9 @@ def later(ms: {'type': int}, command, win_id):
         raise
 
 
-@cmdutils.register(maxsplit=1, no_cmd_split=True, win_id='win_id')
-def repeat(times: {'type': int}, command, win_id):
+@cmdutils.register(maxsplit=1, no_cmd_split=True)
+@cmdutils.argument('win_id', win_id=True)
+def repeat(times: int, command, win_id):
     """Repeat a given command.
 
     Args:
@@ -83,7 +85,8 @@ def repeat(times: {'type': int}, command, win_id):
         commandrunner.run_safely(command)
 
 
-@cmdutils.register(hide=True, win_id='win_id')
+@cmdutils.register(hide=True)
+@cmdutils.argument('win_id', win_id=True)
 def message_error(win_id, text):
     """Show an error message in the statusbar.
 
@@ -93,7 +96,8 @@ def message_error(win_id, text):
     message.error(win_id, text)
 
 
-@cmdutils.register(hide=True, win_id='win_id')
+@cmdutils.register(hide=True)
+@cmdutils.argument('win_id', win_id=True)
 def message_info(win_id, text):
     """Show an info message in the statusbar.
 
@@ -103,7 +107,8 @@ def message_info(win_id, text):
     message.info(win_id, text)
 
 
-@cmdutils.register(hide=True, win_id='win_id')
+@cmdutils.register(hide=True)
+@cmdutils.argument('win_id', win_id=True)
 def message_warning(win_id, text):
     """Show a warning message in the statusbar.
 
@@ -114,7 +119,8 @@ def message_warning(win_id, text):
 
 
 @cmdutils.register(debug=True)
-def debug_crash(typ: {'type': ('exception', 'segfault')}='exception'):
+@cmdutils.argument('typ', choices=['exception', 'segfault'])
+def debug_crash(typ='exception'):
     """Crash for debugging purposes.
 
     Args:
@@ -211,3 +217,20 @@ def debug_set_fake_clipboard(s=None):
         utils.log_clipboard = True
     else:
         utils.fake_clipboard = s
+
+
+@cmdutils.register(hide=True)
+@cmdutils.argument('win_id', win_id=True)
+@cmdutils.argument('count', count=True)
+def repeat_command(win_id, count=None):
+    """Repeat the last executed command.
+
+    Args:
+        count: Which count to pass the command.
+    """
+    mode_manager = objreg.get('mode-manager', scope='window', window=win_id)
+    if mode_manager.mode not in runners.last_command:
+        raise cmdexc.CommandError("You didn't do anything yet.")
+    cmd = runners.last_command[mode_manager.mode]
+    commandrunner = runners.CommandRunner(win_id)
+    commandrunner.run(cmd[0], count if count is not None else cmd[1])

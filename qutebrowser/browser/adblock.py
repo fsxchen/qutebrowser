@@ -27,7 +27,7 @@ import zipfile
 import fnmatch
 
 from qutebrowser.config import config
-from qutebrowser.utils import objreg, standarddir, log, message
+from qutebrowser.utils import objreg, standarddir, log, message, usertypes
 from qutebrowser.commands import cmdutils, cmdexc
 
 
@@ -48,7 +48,7 @@ def guess_zip_filename(zf):
 
 
 def get_fileobj(byte_io):
-    """Get an usable file object to read the hosts file from."""
+    """Get a usable file object to read the hosts file from."""
     byte_io.seek(0)  # rewind downloaded file
     if zipfile.is_zipfile(byte_io):
         byte_io.seek(0)  # rewind what zipfile.is_zipfile did
@@ -116,6 +116,7 @@ class HostBlocker:
             self._local_hosts_file = None
         else:
             self._local_hosts_file = os.path.join(data_dir, 'blocked-hosts')
+        self.on_config_changed()
 
         config_dir = standarddir.config()
         if config_dir is None:
@@ -176,7 +177,8 @@ class HostBlocker:
                 message.info('current',
                              "Run :adblock-update to get adblock lists.")
 
-    @cmdutils.register(instance='host-blocker', win_id='win_id')
+    @cmdutils.register(instance='host-blocker')
+    @cmdutils.argument('win_id', win_id=True)
     def adblock_update(self, win_id):
         """Update the adblock block lists.
 
@@ -208,7 +210,8 @@ class HostBlocker:
             else:
                 fobj = io.BytesIO()
                 fobj.name = 'adblock: ' + url.host()
-                download = download_manager.get(url, fileobj=fobj,
+                target = usertypes.FileObjDownloadTarget(fobj)
+                download = download_manager.get(url, target=target,
                                                 auto_remove=True)
                 self._in_progress.append(download)
                 download.finished.connect(
@@ -273,11 +276,13 @@ class HostBlocker:
     def on_config_changed(self):
         """Update files when the config changed."""
         urls = config.get('content', 'host-block-lists')
-        if urls is None:
+        if urls is None and self._local_hosts_file is not None:
             try:
                 os.remove(self._local_hosts_file)
-            except OSError:
-                log.misc.exception("Failed to delete hosts file.")
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                log.misc.exception("Failed to delete hosts file: {}".format(e))
 
     def on_download_finished(self, download):
         """Check if all downloads are finished and if so, trigger reading.

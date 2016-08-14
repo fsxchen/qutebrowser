@@ -170,7 +170,7 @@ class IPCServer(QObject):
         self._timer.setInterval(READ_TIMEOUT)
         self._timer.timeout.connect(self.on_timeout)
 
-        if os.name == 'nt':  # pragma: no coverage
+        if os.name == 'nt':  # pragma: no cover
             self._atime_timer = None
         else:
             self._atime_timer = usertypes.Timer(self, 'ipc-atime')
@@ -219,7 +219,13 @@ class IPCServer(QObject):
             # https://bugreports.qt.io/browse/QTBUG-48635
             #
             # This means we only use setSocketOption on Windows...
-            os.chmod(self._server.fullServerName(), 0o700)
+            try:
+                os.chmod(self._server.fullServerName(), 0o700)
+            except FileNotFoundError:
+                # https://github.com/The-Compiler/qutebrowser/issues/1530
+                # The server doesn't actually exist even if ok was reported as
+                # True, so report this as an error.
+                raise ListenError(self._server)
 
     @pyqtSlot('QLocalSocket::LocalSocketError')
     def on_error(self, err):
@@ -257,8 +263,8 @@ class IPCServer(QObject):
             log.ipc.debug("We can read a line immediately.")
             self.on_ready_read()
         socket.error.connect(self.on_error)
-        if socket.error() not in (QLocalSocket.UnknownSocketError,
-                                  QLocalSocket.PeerClosedError):
+        if socket.error() not in [QLocalSocket.UnknownSocketError,
+                                  QLocalSocket.PeerClosedError]:
             log.ipc.debug("We got an error immediately.")
             self.on_error(socket.error())
         socket.disconnected.connect(self.on_disconnected)
@@ -293,8 +299,7 @@ class IPCServer(QObject):
         try:
             decoded = data.decode('utf-8')
         except UnicodeDecodeError:
-            log.ipc.error("invalid utf-8: {}".format(
-                binascii.hexlify(data)))
+            log.ipc.error("invalid utf-8: {}".format(binascii.hexlify(data)))
             self._handle_invalid_data()
             return
 
@@ -306,7 +311,7 @@ class IPCServer(QObject):
             self._handle_invalid_data()
             return
 
-        for name in ('args', 'target_arg'):
+        for name in ['args', 'target_arg']:
             if name not in json_data:
                 log.ipc.error("Missing {}: {}".format(name, decoded.strip()))
                 self._handle_invalid_data()
@@ -455,8 +460,7 @@ def send_to_running_instance(socketname, command, target_arg, *,
     if socket is None:
         socket = QLocalSocket()
 
-    if (legacy_name is not None and
-            _has_legacy_server(legacy_name)):
+    if legacy_name is not None and _has_legacy_server(legacy_name):
         name_to_use = legacy_name
     else:
         name_to_use = socketname
@@ -489,8 +493,8 @@ def send_to_running_instance(socketname, command, target_arg, *,
                 socket.waitForDisconnected(CONNECT_TIMEOUT)
             return True
     else:
-        if socket.error() not in (QLocalSocket.ConnectionRefusedError,
-                                  QLocalSocket.ServerNotFoundError):
+        if socket.error() not in [QLocalSocket.ConnectionRefusedError,
+                                  QLocalSocket.ServerNotFoundError]:
             raise SocketError("connecting to running instance", socket)
         else:
             log.ipc.debug("No existing instance present (error {})".format(

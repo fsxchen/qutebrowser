@@ -53,7 +53,8 @@ class MessageMock:
         self._caplog = caplog
         self.messages = []
 
-    def _handle(self, level, win_id, text, immediately=False):
+    def _handle(self, level, win_id, text, immediately=False, *,
+                stack=None):  # pylint: disable=unused-variable
         log_levels = {
             Level.error: logging.ERROR,
             Level.info: logging.INFO,
@@ -61,9 +62,7 @@ class MessageMock:
         }
         log_level = log_levels[level]
 
-        with self._caplog.at_level(log_level):  # needed so we don't fail
-            logging.getLogger('message').log(log_level, text)
-
+        logging.getLogger('messagemock').log(log_level, text)
         self.messages.append(Message(level, win_id, text, immediately))
 
     def _handle_error(self, *args, **kwargs):

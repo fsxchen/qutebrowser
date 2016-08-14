@@ -94,7 +94,7 @@ SECTION_DESC = {
         "Colors used in the UI.\n"
         "A value can be in one of the following format:\n\n"
         " * `#RGB`/`#RRGGBB`/`#RRRGGGBBB`/`#RRRRGGGGBBBB`\n"
-        " * A SVG color name as specified in http://www.w3.org/TR/SVG/"
+        " * An SVG color name as specified in http://www.w3.org/TR/SVG/"
         "types.html#ColorKeywords[the W3C specification].\n"
         " * transparent (no color)\n"
         " * `rgb(r, g, b)` / `rgba(r, g, b, a)` (values 0-255 or "
@@ -133,11 +133,6 @@ def data(readonly=False):
             ('ignore-case',
              SettingValue(typ.IgnoreCase(), 'smart'),
              "Whether to find text on a page case-insensitively."),
-
-            ('wrap-search',
-             SettingValue(typ.Bool(), 'true'),
-             "Whether to wrap finding text to the top when arriving at the "
-             "end."),
 
             ('startpage',
              SettingValue(typ.List(), 'https://duckduckgo.com'),
@@ -272,6 +267,10 @@ def data(readonly=False):
              SettingValue(typ.VerticalPosition(), 'top'),
              "Where to show the downloaded files."),
 
+            ('status-position',
+             SettingValue(typ.VerticalPosition(), 'bottom'),
+             "The position of the status bar."),
+
             ('message-timeout',
              SettingValue(typ.Int(), '2000'),
              "Time (in ms) to show messages in the statusbar for."),
@@ -283,10 +282,6 @@ def data(readonly=False):
             ('confirm-quit',
              SettingValue(typ.ConfirmQuit(), 'never'),
              "Whether to confirm quitting the application."),
-
-            ('display-statusbar-messages',
-             SettingValue(typ.Bool(), 'false'),
-             "Whether to display javascript statusbar messages."),
 
             ('zoom-text-only',
              SettingValue(typ.Bool(), 'false'),
@@ -330,7 +325,7 @@ def data(readonly=False):
             ('window-title-format',
              SettingValue(typ.FormatString(fields=['perc', 'perc_raw', 'title',
                                                    'title_sep', 'id',
-                                                   'scroll_pos']),
+                                                   'scroll_pos', 'host']),
                           '{perc}{title}{title_sep}qutebrowser'),
              "The format to use for the window title. The following "
              "placeholders are defined:\n\n"
@@ -340,7 +335,8 @@ def data(readonly=False):
              "* `{title_sep}`: The string ` - ` if a title is set, empty "
              "otherwise.\n"
              "* `{id}`: The internal window ID of this window.\n"
-             "* `{scroll_pos}`: The page scroll position."),
+             "* `{scroll_pos}`: The page scroll position.\n"
+             "* `{host}`: The host of the current web page."),
 
             ('hide-mouse-cursor',
              SettingValue(typ.Bool(), 'false'),
@@ -354,6 +350,12 @@ def data(readonly=False):
              SettingValue(typ.Bool(), 'false'),
              "Hide the window decoration when using wayland "
              "(requires restart)"),
+
+            ('keyhint-blacklist',
+             SettingValue(typ.List(none_ok=True), ''),
+             "Keychains that shouldn't be shown in the keyhint dialog\n\n"
+             "Globs are supported, so ';*' will blacklist all keychains"
+             "starting with ';'. Use '*' to disable keyhints"),
 
             readonly=readonly
         )),
@@ -400,6 +402,10 @@ def data(readonly=False):
             ('dns-prefetch',
              SettingValue(typ.Bool(), 'true'),
              "Whether to try to pre-fetch DNS entries to speed up browsing."),
+
+            ('custom-headers',
+             SettingValue(typ.HeaderDict(none_ok=True), ''),
+             "Set custom headers for qutebrowser HTTP requests."),
 
             readonly=readonly
         )),
@@ -466,11 +472,15 @@ def data(readonly=False):
         ('input', sect.KeyValue(
             ('timeout',
              SettingValue(typ.Int(minval=0, maxval=MAXVALS['int']), '500'),
-             "Timeout for ambiguous key bindings."),
+             "Timeout for ambiguous key bindings.\n\n"
+             "If the current input forms both a complete match and a partial "
+             "match, the complete match will be executed after this time."),
 
             ('partial-timeout',
-             SettingValue(typ.Int(minval=0, maxval=MAXVALS['int']), '1000'),
-             "Timeout for partially typed key bindings."),
+             SettingValue(typ.Int(minval=0, maxval=MAXVALS['int']), '5000'),
+             "Timeout for partially typed key bindings.\n\n"
+             "If the current input forms only partial matches, the keystring "
+             "will be cleared after this time."),
 
             ('insert-mode-on-plugins',
              SettingValue(typ.Bool(), 'false'),
@@ -613,7 +623,7 @@ def data(readonly=False):
             ('title-format',
              SettingValue(typ.FormatString(
                  fields=['perc', 'perc_raw', 'title', 'title_sep', 'index',
-                         'id', 'scroll_pos']), '{index}: {title}'),
+                         'id', 'scroll_pos', 'host']), '{index}: {title}'),
              "The format to use for the tab title. The following placeholders "
              "are defined:\n\n"
              "* `{perc}`: The percentage as a string like `[10%]`.\n"
@@ -623,7 +633,8 @@ def data(readonly=False):
              "otherwise.\n"
              "* `{index}`: The index of this tab.\n"
              "* `{id}`: The internal tab ID of this tab.\n"
-             "* `{scroll_pos}`: The page scroll position."),
+             "* `{scroll_pos}`: The page scroll position.\n"
+             "* `{host}`: The host of the current web page."),
 
             ('title-alignment',
              SettingValue(typ.TextAlignment(), 'left'),
@@ -741,7 +752,7 @@ def data(readonly=False):
              "are not affected by this setting."),
 
             ('webgl',
-             SettingValue(typ.Bool(), 'true'),
+             SettingValue(typ.Bool(), 'false'),
              "Enables or disables WebGL."),
 
             ('css-regions',
@@ -872,7 +883,7 @@ def data(readonly=False):
             ('chars',
              SettingValue(typ.UniqueCharString(minlen=2, completions=[
                  ('asdfghjkl', "Home row"),
-                 ('dhtnaoeu', "Home row (Dvorak)"),
+                 ('aoeuidnths', "Home row (Dvorak)"),
                  ('abcdefghijklmnopqrstuvwxyz', "All letters"),
              ]), 'asdfghjkl'),
              "Chars used for hint strings."),
@@ -884,7 +895,7 @@ def data(readonly=False):
             ('scatter',
              SettingValue(typ.Bool(), 'true'),
              "Whether to scatter hint key chains (like Vimium) or not (like "
-             "dwb)."),
+             "dwb). Ignored for number hints."),
 
             ('uppercase',
              SettingValue(typ.Bool(), 'false'),
@@ -899,6 +910,11 @@ def data(readonly=False):
              "Follow a hint immediately when the hint text is completely "
              "matched."),
 
+            ('auto-follow-timeout',
+             SettingValue(typ.Int(), '0'),
+             "A timeout to inhibit normal-mode key bindings after a successful"
+             "auto-follow."),
+
             ('next-regexes',
              SettingValue(typ.RegexList(flags=re.IGNORECASE),
                           r'\bnext\b,\bmore\b,\bnewer\b,\b[>→≫]\b,\b(>>|»)\b,'
@@ -910,6 +926,14 @@ def data(readonly=False):
                           r'\bprev(ious)?\b,\bback\b,\bolder\b,\b[<←≪]\b,'
                           r'\b(<<|«)\b'),
              "A comma-separated list of regexes to use for 'prev' links."),
+
+            ('find-implementation',
+             SettingValue(typ.String(
+                 valid_values=typ.ValidValues(
+                     ('javascript', "Better but slower"),
+                     ('python', "Slightly worse but faster"),
+                 )), 'javascript'),
+             "Which implementation to use to find elements to hint."),
 
             readonly=readonly
         )),
@@ -1192,6 +1216,18 @@ def data(readonly=False):
              "Background color for webpages if unset (or empty to use the "
              "theme's color)"),
 
+            ('keyhint.fg',
+             SettingValue(typ.QssColor(), '#FFFFFF'),
+             "Text color for the keyhint widget."),
+
+            ('keyhint.fg.suffix',
+             SettingValue(typ.CssColor(), '#FFFF00'),
+             "Highlight color for keys to complete the current keychain"),
+
+            ('keyhint.bg',
+             SettingValue(typ.QssColor(), 'rgba(0, 0, 0, 80%)'),
+             "Background color of the keyhint widget."),
+
             readonly=readonly
         )),
 
@@ -1272,6 +1308,10 @@ def data(readonly=False):
              SettingValue(
                  typ.Int(none_ok=True, minval=1, maxval=MAXVALS['int']), ''),
              "The default font size for fixed-pitch text."),
+
+            ('keyhint',
+             SettingValue(typ.Font(), DEFAULT_FONT_SIZE + ' ${_monospace}'),
+             "Font used in the keyhint widget."),
 
             readonly=readonly
         )),
@@ -1382,14 +1422,15 @@ KEY_DATA = collections.OrderedDict([
     ('normal', collections.OrderedDict([
         ('clear-keychain ;; search', ['<Escape>']),
         ('set-cmd-text -s :open', ['o']),
-        ('set-cmd-text :open {url}', ['go']),
+        ('set-cmd-text :open {url:pretty}', ['go']),
         ('set-cmd-text -s :open -t', ['O']),
-        ('set-cmd-text :open -t {url}', ['gO']),
+        ('set-cmd-text :open -t {url:pretty}', ['gO']),
         ('set-cmd-text -s :open -b', ['xo']),
-        ('set-cmd-text :open -b {url}', ['xO']),
+        ('set-cmd-text :open -b {url:pretty}', ['xO']),
         ('set-cmd-text -s :open -w', ['wo']),
-        ('set-cmd-text :open -w {url}', ['wO']),
+        ('set-cmd-text :open -w {url:pretty}', ['wO']),
         ('open -t', ['ga', '<Ctrl-T>']),
+        ('open -w', ['<Ctrl-N>']),
         ('tab-close', ['d', '<Ctrl-W>']),
         ('tab-close -o', ['D']),
         ('tab-only', ['co']),
@@ -1397,11 +1438,11 @@ KEY_DATA = collections.OrderedDict([
         ('tab-move', ['gm']),
         ('tab-move -', ['gl']),
         ('tab-move +', ['gr']),
-        ('tab-focus', ['J']),
-        ('tab-prev', ['K']),
+        ('tab-focus', ['J', '<Ctrl-PgDown>']),
+        ('tab-prev', ['K', '<Ctrl-PgUp>']),
         ('tab-clone', ['gC']),
-        ('reload', ['r']),
-        ('reload -f', ['R']),
+        ('reload', ['r', '<F5>']),
+        ('reload -f', ['R', '<Ctrl-F5>']),
         ('back', ['H']),
         ('back -t', ['th']),
         ('back -w', ['wh']),
@@ -1417,15 +1458,14 @@ KEY_DATA = collections.OrderedDict([
         ('hint all hover', [';h']),
         ('hint images', [';i']),
         ('hint images tab', [';I']),
-        ('hint images tab-bg', ['.i']),
-        ('hint links fill ":open {hint-url}"', [';o']),
-        ('hint links fill ":open -t {hint-url}"', [';O']),
-        ('hint links fill ":open -b {hint-url}"', ['.o']),
+        ('hint links fill :open {hint-url}', [';o']),
+        ('hint links fill :open -t {hint-url}', [';O']),
         ('hint links yank', [';y']),
         ('hint links yank-primary', [';Y']),
         ('hint --rapid links tab-bg', [';r']),
         ('hint --rapid links window', [';R']),
         ('hint links download', [';d']),
+        ('hint inputs', [';t']),
         ('scroll left', ['h']),
         ('scroll down', ['j']),
         ('scroll up', ['k']),
@@ -1437,12 +1477,16 @@ KEY_DATA = collections.OrderedDict([
         ('search-prev', ['N']),
         ('enter-mode insert', ['i']),
         ('enter-mode caret', ['v']),
+        ('enter-mode set_mark', ['`']),
+        ('enter-mode jump_mark', ["'"]),
         ('yank', ['yy']),
         ('yank -s', ['yY']),
         ('yank -t', ['yt']),
         ('yank -ts', ['yT']),
         ('yank -d', ['yd']),
         ('yank -ds', ['yD']),
+        ('yank -p', ['yp']),
+        ('yank -ps', ['yP']),
         ('paste', ['pp']),
         ('paste -s', ['pP']),
         ('paste -t', ['Pp']),
@@ -1500,6 +1544,7 @@ KEY_DATA = collections.OrderedDict([
         ('open qute:settings', ['Ss']),
         ('follow-selected', RETURN_KEYS),
         ('follow-selected -t', ['<Ctrl-Return>', '<Ctrl-Enter>']),
+        ('repeat-command', ['.']),
     ])),
 
     ('insert', collections.OrderedDict([
@@ -1529,6 +1574,7 @@ KEY_DATA = collections.OrderedDict([
         ('prompt-accept', RETURN_KEYS),
         ('prompt-yes', ['y']),
         ('prompt-no', ['n']),
+        ('prompt-open-download', ['<Ctrl-X>']),
     ])),
 
     ('command,prompt', collections.OrderedDict([
@@ -1603,4 +1649,6 @@ CHANGED_KEY_COMMANDS = [
     (re.compile(r'^leave-mode$'), r'clear-keychain ;; leave-mode'),
 
     (re.compile(r'^download-remove --all$'), r'download-clear'),
+
+    (re.compile(r'^hint links fill "([^"]*)"$'), r'hint links fill \1'),
 ]

@@ -15,18 +15,14 @@ image:https://requires.io/github/The-Compiler/qutebrowser/requirements.svg?branc
 image:https://travis-ci.org/The-Compiler/qutebrowser.svg?branch=master["Build Status", link="https://travis-ci.org/The-Compiler/qutebrowser"]
 image:https://ci.appveyor.com/api/projects/status/9gmnuip6i1oq7046?svg=true["AppVeyor build status", link="https://ci.appveyor.com/project/The-Compiler/qutebrowser"]
 image:https://codecov.io/github/The-Compiler/qutebrowser/coverage.svg?branch=master["coverage badge",link="https://codecov.io/github/The-Compiler/qutebrowser?branch=master"]
+
+link:http://www.qutebrowser.org[website] | link:http://blog.qutebrowser.org[blog] | link:https://github.com/The-Compiler/qutebrowser/releases[releases]
 // QUTE_WEB_HIDE_END
 
 qutebrowser is a keyboard-focused browser with a minimal GUI. It's based
 on Python, PyQt5 and QtWebKit and free software, licensed under the GPL.
 
 It was inspired by other browsers/addons like dwb and Vimperator/Pentadactyl.
-
-// QUTE_WEB_HIDE
-**qutebrowser is currently running a crowdfunding campaign to add support for
-the QtWebEngine backend, which fixes many issues. Please
-link:http://igg.me/at/qutebrowser[check it out]!**
-// QUTE_WEB_HIDE_END
 
 Screenshots
 -----------
@@ -115,11 +111,8 @@ The following libraries are optional and provide a better user experience:
 To generate the documentation for the `:help` command, when using the git
 repository (rather than a release), http://asciidoc.org/[asciidoc] is needed.
 
-The following libraries are optional and provide colored logging in the
-console:
-
-* https://pypi.python.org/pypi/colorlog/[colorlog]
-* On Windows: https://pypi.python.org/pypi/colorama/[colorama]
+On Windows, https://pypi.python.org/pypi/colorama/[colorama] is needed to
+display colored log output.
 
 See link:INSTALL.asciidoc[INSTALL] for directions on how to install qutebrowser
 and its dependencies.
@@ -148,81 +141,104 @@ Contributors, sorted by the number of commits in descending order:
 // QUTE_AUTHORS_START
 * Florian Bruhin
 * Daniel Schadt
+* Ryan Roden-Corrent
 * Antoni Boucher
 * Lamar Pavel
 * Bruno Oliveira
 * Alexander Cogneau
-* Martin Tournoij
 * Felix Van der Jeugt
+* Martin Tournoij
+* Jakub Klinkovský
 * Raphael Pierzina
 * Joel Torstensson
+* Jan Verbeek
+* Tarcisio Fedrizzi
 * Patric Schmitz
 * Claude
+* Corentin Julé
 * meles5
-* Tarcisio Fedrizzi
+* Philipp Hansch
+* Panagiotis Ktistakis
 * Artur Shaik
 * Nathan Isom
 * Thorsten Wißmann
-* Philipp Hansch
 * Kevin Velghe
 * Austin Anderson
+* Jimmy
+* Marshall Lochbaum
 * Alexey "Averrin" Nabrodov
 * avk
 * ZDarian
 * Milan Svoboda
 * John ShaggyTwoDope Jenkins
-* Jimmy
 * Peter Vilim
 * Clayton Craft
 * Oliver Caldwell
 * Jonas Schürmann
-* Panagiotis Ktistakis
-* Jakub Klinkovský
-* skinnay
 * error800
+* Liam BEGUIN
+* skinnay
 * Zach-Button
+* Tomasz Kramkowski
+* Ismail S
 * Halfwit
+* David Vogt
 * rikn00
+* kanikaa1234
+* haitaka
+* Nick Ginther
+* Michał Góral
 * Michael Ilsaas
 * Martin Zimmermann
+* Fritz Reichwald
 * Brian Jackson
 * sbinix
 * neeasade
 * jnphilipp
 * Tobias Patzl
+* Stefan Tatschner
+* Samuel Loury
 * Peter Michely
+* Panashe M. Fundira
 * Link
 * Larry Hynes
 * Johannes Altmanninger
+* Jeremy Kaplan
+* Ismail
+* Edgar Hipp
+* Daryl Finlay
+* adam
 * Samir Benmendil
-* Ryan Roden-Corrent
 * Regina Hug
 * Mathias Fussenegger
 * Marcelo Santos
+* Jean-Louis Fuchs
 * Fritz V155 Reichwald
 * Franz Fellner
-* Corentin Jule
 * zwarag
 * xd1le
+* oniondreams
 * issue
 * haxwithaxe
 * evan
 * dylan araps
-* Tomasz Kramkowski
+* Xitian9
 * Tomas Orsava
 * Tobias Werth
 * Tim Harder
 * Thiago Barroso Perrotta
-* Stefan Tatschner
 * Sorokin Alexei
-* Samuel Loury
+* Noah Huesser
 * Matthias Lisin
 * Marcel Schilling
+* Johannes Martinsson
 * Jean-Christophe Petkovich
+* Jay Kamat
 * Helen Sherwood-Taylor
 * HalosGhost
 * Gregor Pohl
 * Eivind Uggedal
+* Dietrich Daroch
 * Daniel Lu
 * Arseniy Seroka
 * Andy Balaam
@@ -231,7 +247,8 @@ Contributors, sorted by the number of commits in descending order:
 
 The following people have contributed graphics:
 
-* WOFall (icon)
+* Jad/link:http://yelostudio.com[yelo] (new icon)
+* WOFall (original icon)
 * regines (key binding cheatsheet)
 
 Thanks / Similar projects
@@ -276,6 +293,7 @@ problems and helpful hints:
 
 Also, thanks to:
 
+* Everyone contributing to the link:doc/backers.asciidoc[crowdfunding].
 * Everyone who had the patience to test qutebrowser before v0.1.
 * Everyone triaging/fixing my bugs in the
 https://bugreports.qt.io/secure/Dashboard.jspa[Qt bugtracker]
