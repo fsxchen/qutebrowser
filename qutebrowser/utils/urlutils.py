@@ -158,7 +158,8 @@ def _is_url_dns(urlstr):
     return not info.error()
 
 
-def fuzzy_url(urlstr, cwd=None, relative=False, do_search=True):
+def fuzzy_url(urlstr, cwd=None, relative=False, do_search=True,
+              force_search=False):
     """Get a QUrl based on a user input which is URL or search term.
 
     Args:
@@ -166,6 +167,8 @@ def fuzzy_url(urlstr, cwd=None, relative=False, do_search=True):
         cwd: The current working directory, or None.
         relative: Whether to resolve relative files.
         do_search: Whether to perform a search on non-URLs.
+        force_search: Whether to force a search even if the content can be
+                      interpreted as a URL or a path.
 
     Return:
         A target QUrl to a search page or the original URL.
@@ -174,18 +177,18 @@ def fuzzy_url(urlstr, cwd=None, relative=False, do_search=True):
     path = get_path_if_valid(urlstr, cwd=cwd, relative=relative,
                              check_exists=True)
 
-    if path is not None:
+    if not force_search and path is not None:
         url = QUrl.fromLocalFile(path)
-    elif (not do_search) or is_url(urlstr):
-        # probably an address
-        log.url.debug("URL is a fuzzy address")
-        url = qurl_from_user_input(urlstr)
-    else:  # probably a search term
+    elif force_search or (do_search and not is_url(urlstr)):
+        # probably a search term
         log.url.debug("URL is a fuzzy search term")
         try:
             url = _get_search_url(urlstr)
         except ValueError:  # invalid search engine
             url = qurl_from_user_input(urlstr)
+    else:  # probably an address
+        log.url.debug("URL is a fuzzy address")
+        url = qurl_from_user_input(urlstr)
     log.url.debug("Converting fuzzy term {!r} to URL -> {}".format(
                   urlstr, url.toDisplayString()))
     if do_search and config.get('general', 'auto-search') and urlstr:
@@ -197,7 +200,7 @@ def fuzzy_url(urlstr, cwd=None, relative=False, do_search=True):
 
 
 def _has_explicit_scheme(url):
-    """Check if an url has an explicit scheme given.
+    """Check if a url has an explicit scheme given.
 
     Args:
         url: The URL as QUrl.
@@ -205,8 +208,9 @@ def _has_explicit_scheme(url):
     # Note that generic URI syntax actually would allow a second colon
     # after the scheme delimiter. Since we don't know of any URIs
     # using this and want to support e.g. searching for scoped C++
-    # symbols, we treat this as not an URI anyways.
+    # symbols, we treat this as not a URI anyways.
     return (url.isValid() and url.scheme() and
+            (url.host() or url.path()) and
             not url.path().startswith(' ') and
             not url.path().startswith(':'))
 
@@ -259,12 +263,12 @@ def is_url(urlstr):
         # URLs with explicit schemes are always URLs
         log.url.debug("Contains explicit scheme")
         url = True
-    elif qurl_userinput.host() in ('localhost', '127.0.0.1', '::1'):
+    elif qurl_userinput.host() in ['localhost', '127.0.0.1', '::1']:
         log.url.debug("Is localhost.")
         url = True
     elif is_special_url(qurl):
         # Special URLs are always URLs, even with autosearch=False
-        log.url.debug("Is an special URL.")
+        log.url.debug("Is a special URL.")
         url = True
     elif autosearch == 'dns':
         log.url.debug("Checking via DNS check")
@@ -317,7 +321,7 @@ def qurl_from_user_input(urlstr):
 
 
 def invalid_url_error(win_id, url, action):
-    """Display an error message for an URL.
+    """Display an error message for a URL.
 
     Args:
         win_id: The window ID to show the error message in.
@@ -376,7 +380,7 @@ def get_path_if_valid(pathstr, cwd=None, relative=False, check_exists=False):
 
 
 def filename_from_url(url):
-    """Get a suitable filename from an URL.
+    """Get a suitable filename from a URL.
 
     Args:
         url: The URL to parse, as a QUrl.
@@ -422,7 +426,7 @@ def host_tuple(url):
 
 
 def get_errstring(url, base="Invalid URL"):
-    """Get an error string for an URL.
+    """Get an error string for a URL.
 
     Args:
         url: The URL as a QUrl.
@@ -496,7 +500,7 @@ class IncDecError(Exception):
 
 
 def _get_incdec_value(match, incdec, url):
-    """Get a incremented/decremented URL based on a URL match."""
+    """Get an incremented/decremented URL based on a URL match."""
     pre, zeroes, number, post = match.groups()
     # This should always succeed because we match \d+
     val = int(number)
@@ -566,3 +570,12 @@ def incdec_number(url, incdec, segments=None):
         return url
 
     raise IncDecError("No number found in URL!", url)
+
+
+def file_url(path):
+    """Return a file:// url (as string) to the given local path.
+
+    Arguments:
+        path: The absolute path to the local file
+    """
+    return QUrl.fromLocalFile(path).toString(QUrl.FullyEncoded)

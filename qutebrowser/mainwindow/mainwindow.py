@@ -34,8 +34,9 @@ from qutebrowser.mainwindow import tabbedbrowser
 from qutebrowser.mainwindow.statusbar import bar
 from qutebrowser.completion import completionwidget
 from qutebrowser.keyinput import modeman
-from qutebrowser.browser import hints, downloads, downloadview, commands
-from qutebrowser.misc import crashsignal
+from qutebrowser.browser import commands, downloadview, hints
+from qutebrowser.browser.webkit import downloads
+from qutebrowser.misc import crashsignal, keyhintwidget
 
 
 win_id_gen = itertools.count(0)
@@ -76,7 +77,7 @@ def get_window(via_ipc, force_window=False, force_tab=False,
             win_id = window.win_id
             window_to_raise = window
         win_id = window.win_id
-        if open_target not in ('tab-silent', 'tab-bg-silent'):
+        if open_target not in ['tab-silent', 'tab-bg-silent']:
             window_to_raise = window
     if window_to_raise is not None:
         window_to_raise.setWindowState(
@@ -158,7 +159,10 @@ class MainWindow(QWidget):
 
         self._completion = completionwidget.CompletionView(self.win_id, self)
 
-        self._commandrunner = runners.CommandRunner(self.win_id)
+        self._commandrunner = runners.CommandRunner(self.win_id,
+                                                    partial_match=True)
+
+        self._keyhint = keyhintwidget.KeyHintView(self.win_id, self)
 
         log.init.debug("Initializing modes...")
         modeman.init(self.win_id, self)
@@ -178,14 +182,11 @@ class MainWindow(QWidget):
         # resizing will fail. Therefore, we use singleShot QTimers to make sure
         # we defer this until everything else is initialized.
         QTimer.singleShot(0, self._connect_resize_completion)
+        QTimer.singleShot(0, self._connect_resize_keyhint)
         objreg.get('config').changed.connect(self.on_config_changed)
 
         if config.get('ui', 'hide-mouse-cursor'):
             self.setCursor(Qt.BlankCursor)
-
-        #self.retranslateUi(MainWindow)
-        #self.tabWidget.setCurrentIndex(0)
-        #QtCore.QMetaObject.connectSlotsByName(MainWindow)
 
         objreg.get("app").new_window.emit(self)
 
@@ -195,28 +196,41 @@ class MainWindow(QWidget):
     @pyqtSlot(str, str)
     def on_config_changed(self, section, option):
         """Resize the completion if related config options changed."""
-        if section == 'completion' and option in ('height', 'shrink'):
+        if section == 'completion' and option in ['height', 'shrink']:
             self.resize_completion()
         elif section == 'ui' and option == 'statusbar-padding':
             self.resize_completion()
         elif section == 'ui' and option == 'downloads-position':
             self._add_widgets()
+        elif section == 'ui' and option == 'status-position':
+            self._add_widgets()
+            self.resize_completion()
 
     def _add_widgets(self):
         """Add or readd all widgets to the VBox."""
         self._vbox.removeWidget(self.tabbed_browser)
         self._vbox.removeWidget(self._downloadview)
         self._vbox.removeWidget(self.status)
-        position = config.get('ui', 'downloads-position')
-        if position == 'top':
-            self._vbox.addWidget(self._downloadview)
-            self._vbox.addWidget(self.tabbed_browser)
-        elif position == 'bottom':
-            self._vbox.addWidget(self.tabbed_browser)
-            self._vbox.addWidget(self._downloadview)
+        downloads_position = config.get('ui', 'downloads-position')
+        status_position = config.get('ui', 'status-position')
+        widgets = [self.tabbed_browser]
+
+        if downloads_position == 'top':
+            widgets.insert(0, self._downloadview)
+        elif downloads_position == 'bottom':
+            widgets.append(self._downloadview)
         else:
-            raise ValueError("Invalid position {}!".format(position))
-        self._vbox.addWidget(self.status)
+            raise ValueError("Invalid position {}!".format(downloads_position))
+
+        if status_position == 'top':
+            widgets.insert(0, self.status)
+        elif status_position == 'bottom':
+            widgets.append(self.status)
+        else:
+            raise ValueError("Invalid position {}!".format(status_position))
+
+        for widget in widgets:
+            self._vbox.addWidget(widget)
 
     def _load_state_geometry(self):
         """Load the geometry from the state file."""
@@ -256,6 +270,11 @@ class MainWindow(QWidget):
         self._completion.resize_completion.connect(self.resize_completion)
         self.resize_completion()
 
+    def _connect_resize_keyhint(self):
+        """Connect the reposition_keyhint signal and resize it once."""
+        self._keyhint.reposition_keyhint.connect(self.reposition_keyhint)
+        self.reposition_keyhint()
+
     def _set_default_geometry(self):
         """Set some sensible default geometry."""
         self.setGeometry(QRect(50, 50, 800, 600))
@@ -292,7 +311,11 @@ class MainWindow(QWidget):
             status.keystring.setText)
         cmd.got_cmd.connect(self._commandrunner.run_safely)
         cmd.returnPressed.connect(tabs.on_cmd_return_pressed)
-        tabs.got_cmd.connect(self._commandrunner.run_safely)
+
+        # key hint popup
+        for mode, parser in keyparsers.items():
+            parser.keystring_updated.connect(functools.partial(
+                self._keyhint.update_keyhint, mode.name))
 
         # config
         for obj in keyparsers.values():
@@ -322,12 +345,8 @@ class MainWindow(QWidget):
 
         tabs.tab_index_changed.connect(status.tabindex.on_tab_index_changed)
 
-        tabs.current_tab_changed.connect(status.txt.on_tab_changed)
-        tabs.cur_statusbar_message.connect(status.txt.on_statusbar_message)
-        tabs.cur_load_started.connect(status.txt.on_load_started)
-
         tabs.current_tab_changed.connect(status.url.on_tab_changed)
-        tabs.cur_url_text_changed.connect(status.url.set_url)
+        tabs.cur_url_changed.connect(status.url.set_url)
         tabs.cur_link_hovered.connect(status.url.set_hover_url)
         tabs.cur_load_status_changed.connect(status.url.on_load_status_changed)
 
@@ -360,16 +379,41 @@ class MainWindow(QWidget):
                 height = contents_height
         else:
             contents_height = -1
-        # hpoint now would be the bottom-left edge of the widget if it was on
-        # the top of the main window.
-        topleft_y = self.height() - self.status.height() - height
-        topleft_y = qtutils.check_overflow(topleft_y, 'int', fatal=False)
-        topleft = QPoint(0, topleft_y)
-        bottomright = self.status.geometry().topRight()
+        status_position = config.get('ui', 'status-position')
+        if status_position == 'bottom':
+            top = self.height() - self.status.height() - height
+            top = qtutils.check_overflow(top, 'int', fatal=False)
+            topleft = QPoint(0, top)
+            bottomright = self.status.geometry().topRight()
+        elif status_position == 'top':
+            topleft = self.status.geometry().bottomLeft()
+            bottom = self.status.height() + height
+            bottom = qtutils.check_overflow(bottom, 'int', fatal=False)
+            bottomright = QPoint(self.width(), bottom)
+        else:
+            raise ValueError("Invalid position {}!".format(status_position))
         rect = QRect(topleft, bottomright)
         log.misc.debug('completion rect: {}'.format(rect))
         if rect.isValid():
             self._completion.setGeometry(rect)
+
+    @pyqtSlot()
+    def reposition_keyhint(self):
+        """Adjust keyhint according to config."""
+        if not self._keyhint.isVisible():
+            return
+        # Shrink the window to the shown text and place it at the bottom left
+        width = self._keyhint.width()
+        height = self._keyhint.height()
+        topleft_y = self.height() - self.status.height() - height
+        topleft_y = qtutils.check_overflow(topleft_y, 'int', fatal=False)
+        topleft = QPoint(0, topleft_y)
+        bottomright = (self.status.geometry().topLeft() +
+                       QPoint(width, 0))
+        rect = QRect(topleft, bottomright)
+        log.misc.debug('keyhint rect: {}'.format(rect))
+        if rect.isValid():
+            self._keyhint.setGeometry(rect)
 
     @cmdutils.register(instance='main-window', scope='window')
     @pyqtSlot()
@@ -398,6 +442,7 @@ class MainWindow(QWidget):
         """
         super().resizeEvent(e)
         self.resize_completion()
+        self.reposition_keyhint()
         self._downloadview.updateGeometry()
         self.tabbed_browser.tabBar().refresh()
 
@@ -417,7 +462,7 @@ class MainWindow(QWidget):
         tab_count = self.tabbed_browser.count()
         download_manager = objreg.get('download-manager', scope='window',
                                       window=self.win_id)
-        download_count = download_manager.rowCount()
+        download_count = download_manager.running_downloads()
         quit_texts = []
         # Ask if multiple-tabs are open
         if 'multiple-tabs' in confirm_quit and tab_count > 1:

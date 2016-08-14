@@ -17,11 +17,34 @@
 # You should have received a copy of the GNU General Public License
 # along with qutebrowser.  If not, see <http://www.gnu.org/licenses/>.
 
+# pylint: disable=unused-variable
+
 """Tests for qutebrowser.commands.cmdutils."""
 
 import pytest
 
-from qutebrowser.commands import cmdutils, cmdexc
+from qutebrowser.commands import cmdutils, cmdexc, argparser, command
+from qutebrowser.utils import usertypes, typing
+
+
+@pytest.fixture(autouse=True)
+def clear_globals(monkeypatch):
+    """Clear the cmdutils globals between each test."""
+    monkeypatch.setattr(cmdutils, 'cmd_dict', {})
+    monkeypatch.setattr(cmdutils, 'aliases', [])
+
+
+def _get_cmd(*args, **kwargs):
+    """Get a command object created via @cmdutils.register.
+
+    Args:
+        Passed to @cmdutils.register decorator
+    """
+    @cmdutils.register(*args, **kwargs)
+    def fun():
+        """Blah."""
+        pass
+    return cmdutils.cmd_dict['fun']
 
 
 class TestCheckOverflow:
@@ -78,14 +101,6 @@ class TestCheckExclusive:
 
 
 class TestRegister:
-
-    # pylint: disable=unused-variable
-
-    @pytest.fixture(autouse=True)
-    def clear_globals(self, monkeypatch):
-        """Clear the cmdutils globals between each test."""
-        monkeypatch.setattr(cmdutils, 'cmd_dict', {})
-        monkeypatch.setattr(cmdutils, 'aliases', [])
 
     def test_simple(self):
         @cmdutils.register()
@@ -172,3 +187,225 @@ class TestRegister:
             """Blah."""
             pass
         assert cmdutils.cmd_dict['fun'].hide
+
+    def test_star_args(self):
+        """Check handling of *args."""
+        @cmdutils.register()
+        def fun(*args):
+            """Blah."""
+            pass
+        with pytest.raises(argparser.ArgumentParserError):
+            cmdutils.cmd_dict['fun'].parser.parse_args([])
+
+    def test_star_args_optional(self):
+        """Check handling of *args withstar_args_optional."""
+        @cmdutils.register(star_args_optional=True)
+        def fun(*args):
+            """Blah."""
+            pass
+        cmdutils.cmd_dict['fun'].parser.parse_args([])
+
+    def test_flag(self):
+        @cmdutils.register()
+        def fun(arg=False):
+            """Blah."""
+            pass
+        parser = cmdutils.cmd_dict['fun'].parser
+        assert parser.parse_args(['--arg']).arg
+        assert parser.parse_args(['-a']).arg
+        assert not parser.parse_args([]).arg
+
+    def test_flag_argument(self):
+        @cmdutils.register()
+        @cmdutils.argument('arg', flag='b')
+        def fun(arg=False):
+            """Blah."""
+            pass
+        parser = cmdutils.cmd_dict['fun'].parser
+
+        assert parser.parse_args(['-b']).arg
+        with pytest.raises(argparser.ArgumentParserError):
+            parser.parse_args(['-a'])
+
+    def test_partial_arg(self):
+        """Test with only some arguments decorated with @cmdutils.argument."""
+        @cmdutils.register()
+        @cmdutils.argument('arg1', flag='b')
+        def fun(arg1=False, arg2=False):
+            """Blah."""
+            pass
+
+    def test_win_id(self):
+        @cmdutils.register()
+        @cmdutils.argument('win_id', win_id=True)
+        def fun(win_id):
+            """Blah."""
+            pass
+        assert cmdutils.cmd_dict['fun']._get_call_args(42) == ([42], {})
+
+    def test_count(self):
+        @cmdutils.register()
+        @cmdutils.argument('count', count=True)
+        def fun(count=0):
+            """Blah."""
+            pass
+        assert cmdutils.cmd_dict['fun']._get_call_args(42) == ([0], {})
+
+    def test_count_without_default(self):
+        with pytest.raises(TypeError) as excinfo:
+            @cmdutils.register()
+            @cmdutils.argument('count', count=True)
+            def fun(count):
+                """Blah."""
+                pass
+
+        expected = "fun: handler has count parameter without default!"
+        assert str(excinfo.value) == expected
+
+    @pytest.mark.parametrize('hide', [True, False])
+    def test_pos_args(self, hide):
+        @cmdutils.register()
+        @cmdutils.argument('arg', hide=hide)
+        def fun(arg):
+            """Blah."""
+            pass
+
+        pos_args = cmdutils.cmd_dict['fun'].pos_args
+        if hide:
+            assert pos_args == []
+        else:
+            assert pos_args == [('arg', 'arg')]
+
+    Enum = usertypes.enum('Test', ['x', 'y'])
+
+    @pytest.mark.parametrize('typ, inp, choices, expected', [
+        (int, '42', None, 42),
+        (int, 'x', None, cmdexc.ArgumentTypeError),
+        (str, 'foo', None, 'foo'),
+
+        (typing.Union[str, int], 'foo', None, 'foo'),
+        (typing.Union[str, int], '42', None, 42),
+
+        # Choices
+        (str, 'foo', ['foo'], 'foo'),
+        (str, 'bar', ['foo'], cmdexc.ArgumentTypeError),
+
+        # Choices with Union: only checked when it's a str
+        (typing.Union[str, int], 'foo', ['foo'], 'foo'),
+        (typing.Union[str, int], 'bar', ['foo'], cmdexc.ArgumentTypeError),
+        (typing.Union[str, int], '42', ['foo'], 42),
+
+        (Enum, 'x', None, Enum.x),
+        (Enum, 'z', None, cmdexc.ArgumentTypeError),
+    ])
+    def test_typed_args(self, typ, inp, choices, expected):
+        @cmdutils.register()
+        @cmdutils.argument('arg', choices=choices)
+        def fun(arg: typ):
+            """Blah."""
+            pass
+
+        cmd = cmdutils.cmd_dict['fun']
+        cmd.namespace = cmd.parser.parse_args([inp])
+
+        if expected is cmdexc.ArgumentTypeError:
+            with pytest.raises(cmdexc.ArgumentTypeError):
+                cmd._get_call_args(win_id=0)
+        else:
+            assert cmd._get_call_args(win_id=0) == ([expected], {})
+
+
+class TestArgument:
+
+    """Test the @cmdutils.argument decorator."""
+
+    def test_invalid_argument(self):
+        with pytest.raises(ValueError) as excinfo:
+            @cmdutils.argument('foo')
+            def fun(bar):
+                """Blah."""
+                pass
+        assert str(excinfo.value) == "fun has no argument foo!"
+
+    def test_storage(self):
+        @cmdutils.argument('foo', flag='x')
+        @cmdutils.argument('bar', flag='y')
+        def fun(foo, bar):
+            """Blah."""
+            pass
+        expected = {
+            'foo': command.ArgInfo(flag='x'),
+            'bar': command.ArgInfo(flag='y')
+        }
+        assert fun.qute_args == expected
+
+    def test_wrong_order(self):
+        """When @cmdutils.argument is used above (after) @register, fail."""
+        with pytest.raises(ValueError) as excinfo:
+            @cmdutils.argument('bar', flag='y')
+            @cmdutils.register()
+            def fun(bar):
+                """Blah."""
+                pass
+
+        text = ("@cmdutils.argument got called above (after) "
+                "@cmdutils.register for fun!")
+
+        assert str(excinfo.value) == text
+
+    def test_count_and_win_id_same_arg(self):
+        with pytest.raises(TypeError) as excinfo:
+            @cmdutils.argument('arg', count=True, win_id=True)
+            def fun(arg=0):
+                """Blah."""
+                pass
+
+        assert str(excinfo.value) == "Argument marked as both count/win_id!"
+
+
+class TestRun:
+
+    @pytest.fixture(autouse=True)
+    def patching(self, mode_manager, fake_args):
+        fake_args.backend = 'webkit'
+
+    @pytest.mark.parametrize('backend, used, ok', [
+        (usertypes.Backend.QtWebEngine, 'webengine', True),
+        (usertypes.Backend.QtWebEngine, 'webkit', False),
+        (usertypes.Backend.QtWebKit, 'webengine', False),
+        (usertypes.Backend.QtWebKit, 'webkit', True),
+        (None, 'webengine', True),
+        (None, 'webkit', True),
+    ])
+    def test_backend(self, fake_args, backend, used, ok):
+        fake_args.backend = used
+        cmd = _get_cmd(backend=backend)
+        if ok:
+            cmd.run(win_id=0)
+        else:
+            with pytest.raises(cmdexc.PrerequisitesError) as excinfo:
+                cmd.run(win_id=0)
+            assert str(excinfo.value).endswith(' backend.')
+
+    def test_no_args(self):
+        cmd = _get_cmd()
+        cmd.run(win_id=0)
+
+    def test_instance_unavailable_with_backend(self, fake_args):
+        """Test what happens when a backend doesn't have an objreg object.
+
+        For example, QtWebEngine doesn't have 'hintmanager' registered. We make
+        sure the backend checking happens before resolving the instance, so we
+        display an error instead of crashing.
+        """
+        @cmdutils.register(instance='doesnotexist',
+                           backend=usertypes.Backend.QtWebEngine)
+        def fun(self):
+            """Blah."""
+            pass
+
+        fake_args.backend = 'webkit'
+        cmd = cmdutils.cmd_dict['fun']
+        with pytest.raises(cmdexc.PrerequisitesError) as excinfo:
+            cmd.run(win_id=0)
+        assert str(excinfo.value).endswith(' backend.')

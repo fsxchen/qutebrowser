@@ -158,11 +158,11 @@ Examples:
 # run only pytest tests which failed in last run:
 tox -e py35 -- --lf
 
-# run only the integration feature tests:
-tox -e py35 -- tests/integration/features
+# run only the end2end feature tests:
+tox -e py35 -- tests/end2end/features
 
 # run everything with undo in the generated name, based on the scenario text
-tox -e py35 -- tests/integration/features/test_tabs.py -k undo
+tox -e py35 -- tests/end2end/features/test_tabs_bdd.py -k undo
 
 # run coverage test for specific file (updates htmlcov/index.html)
 tox -e py35-cov -- tests/unit/browser/test_webelem.py
@@ -174,10 +174,14 @@ Profiling
 In the _scripts/_ subfolder there's a `run_profile.py` which profiles the code
 and shows a graphical representation of what takes how much time.
 
-It needs https://pypi.python.org/pypi/pyprof2calltree/[pyprof2calltree] and
-http://kcachegrind.sourceforge.net/html/Home.html[KCacheGrind]. It uses the
-built-in Python https://docs.python.org/3.4/library/profile.html[cProfile]
-module.
+It uses the built-in Python
+https://docs.python.org/3.4/library/profile.html[cProfile] module and can show
+the output in four different ways:
+
+* Raw profile file (`--profile-tool=none`)
+* https://pypi.python.org/pypi/pyprof2calltree/[pyprof2calltree] and http://kcachegrind.sourceforge.net/html/Home.html[KCacheGrind] (`--profile-tool=kcachegrind`)
+* https://jiffyclub.github.io/snakeviz/[SnakeViz] (`--profile-tool=snakeviz`)
+* https://github.com/jrfonseca/gprof2dot[gprof2dot] (needs `dot` from http://graphviz.org/[Graphviz] and http://feh.finalrewind.org/[feh])
 
 Debugging
 ~~~~~~~~~
@@ -212,7 +216,6 @@ Documentation of used Python libraries:
 * http://pythonhosted.org/setuptools/[setuptools]
 * http://cx-freeze.readthedocs.org/en/latest/overview.html[cx_Freeze]
 * https://pypi.python.org/pypi/colorama[colorama]
-* https://pypi.python.org/pypi/colorlog[colorlog]
 
 Related RFCs and standards:
 
@@ -371,7 +374,7 @@ The following logging levels are available for every logger:
 
 [width="75%",cols="25%,75%"]
 |=======================================================================
-|criticial |Critical issue, qutebrowser can't continue to run.
+|critical  |Critical issue, qutebrowser can't continue to run.
 |error     |There was an issue and some kind of operation was abandoned.
 |warning   |There was an issue but the operation can continue running.
 |info      |General informational messages.
@@ -417,35 +420,59 @@ The types of the function arguments are inferred based on their default values,
 e.g. an argument `foo=True` will be converted to a flag `-f`/`--foo` in
 qutebrowser's commandline.
 
-This behavior can be overridden using Python's
-http://legacy.python.org/dev/peps/pep-3107/[function annotations]. The
-annotation should always be a `dict`, like this:
+The type can be overridden using Python's
+http://legacy.python.org/dev/peps/pep-3107/[function annotations]:
 
 [source,python]
 ----
 @cmdutils.register(...)
-def foo(bar: {'type': int}, baz=True):
+def foo(bar: int, baz=True):
     ...
 ----
 
-The following keys are supported in the dict:
-
-* `type`: The type this value should have. The value entered by the user is
-then automatically checked. Possible values:
+Possible values:
     - A callable (`int`, `float`, etc.): Gets called to validate/convert the
       value.
-    - A string: The value must match exactly (mainly useful with tuples to get
-      a choice of values, see below).
     - A python enum type: All members of the enum are possible values.
-    - A tuple of multiple types above: Any of these types are valid values,
-      e.g. `('foo', 'bar')` or `(int, 'foo')`.
-* `flag`: The flag to be used, as 1-char string (default: First char of the
-long name).
-* `nargs`: Gets passed to argparse, see
-https://docs.python.org/dev/library/argparse.html#nargs[its documentation].
+    - A `typing.Union` of multiple types above: Any of these types are valid
+      values, e.g. `typing.Union[str, int]`
+
+You can customize how an argument is handled using the `@cmdutils.argument`
+decorator *after* `@cmdutils.register`. This can e.g. be used to customize the
+flag an argument should get:
+
+[source,python]
+----
+@cmdutils.register(...)
+@cmdutils.argument('bar', flag='c')
+def foo(bar):
+    ...
+----
+
+For a `str` argument, you can restrict the allowed strings using `choices`:
+
+[source,python]
+----
+@cmdutils.register(...)
+@cmdutils.argument('bar', choices=['val1', 'val2'])
+def foo(bar: str):
+    ...
+----
+
+For `typing.Union` types, the given `choices` are only checked if other types
+(like `int`) don't match.
+
+The following arguments are supported for `@cmdutils.argument`:
+
+- `flag`: Customize the short flag (`-x`) the argument will get.
+- `win_id=True`: Mark the argument as special window ID argument
+- `count=True`: Mark the argument as special count argument
+- `hide=True`: Hide the argument from the documentation
+- `completion`: A `usertypes.Completion` member to use as completion.
+- `choices`: The allowed string choices for the argument.
 
 The name of an argument will always be the parameter name, with any trailing
-underscores stripped.
+underscores stripped and underscores replaced by dashes.
 
 [[handling-urls]]
 Handling URLs
@@ -568,10 +595,7 @@ Return:
 * The layout of a class should be like this:
   - docstring
   - `__magic__` methods
-  - properties
-  - _private methods
-  - public methods
-  - `on_*` methods
+  - other methods
   - overrides of Qt methods
 
 Checklists
@@ -593,6 +617,14 @@ workaround.
 * Check relevant
 https://github.com/The-Compiler/qutebrowser/issues?q=is%3Aopen+is%3Aissue+label%3Aqt[qutebrowser
 bugs] and check if they're fixed.
+* As soon as Homebrew updated, update the custom OS X bottle:
+  - Update https://github.com/The-Compiler/homebrew-qt5-webkit/blob/master/Formula/qt5.rb[qt5.rb]
+  - `brew install --build-from-source --build-bottle --verbose qt5.rb`
+  - `brew bottle qt5.rb`
+  - `brew install --build-from-source --build-bottle --verbose pyqt5`
+  - `brew bottle pyqt5`
+  - Upload bottles to github
+  - Adjust `scripts/dev/ci/travis_install.sh`
 
 New PyQt release
 ~~~~~~~~~~~~~~~~
@@ -606,6 +638,11 @@ qutebrowser release
 
 * Make sure there are no unstaged changes and the tests are green.
 
+* Add newest config to `tests/unit/config/old_configs` and update `test_upgrade_version`
+    - `python -m qutebrowser --basedir conf :quit`
+    - `sed '/^#/d'  conf/config/qutebrowser.conf > tests/unit/config/old_configs/qutebrowser-v0.x.y.conf`
+    - `rm -r conf`
+    - commit
 * Adjust `__version_info__` in `qutebrowser/__init__.py`.
 * Remove *(unreleased)* from changelog.
 * Run tests again
@@ -613,7 +650,6 @@ qutebrowser release
 * Commit
 
 * Create annotated git tag (`git tag -s "v0.X.Y" -m "Release v0.X.Y"`)
-* If it's a new minor, create git branch `v0.X.x`
 * If committing on minor branch, cherry-pick release commit to master.
 * `git push origin`; `git push origin v0.X.Y`
 * Create release on github
@@ -622,12 +658,16 @@ as closed.
 
 * Run `scripts/dev/build_release.py` on Linux to build an sdist
 * Upload to PyPI: `twine upload dist/foo{,.asc}`
-* Create Windows packages via `scripts/dev/build_release.py` and upload.
+* Create Windows packages via `C:\Python34_x32\python scripts\dev\build_release.py --asciidoc C:\Python27\python C:\asciidoc-8.6.9\asciidoc.py`
+* Upload to github
 
 * Upload to qutebrowser.org with checksum/GPG
     - On server: `sudo mkdir -p /srv/http/qutebrowser/releases/v0.X.Y/windows`
     - `rsync -avPh dist/ tonks:`
     - On server: `sudo mv qutebrowser-0.X.Y.tar.gz* /srv/http/qutebrowser/releases/v0.X.Y`
-
-* Update AUR package
+    - Upload windows release:
+           - `scp bb-win8:proj/qutebrowser/qutebrowser-0.X.Y-windows.zip .`
+           - `aunpack qutebrowser-0.X.Y-windows.zip`
+           - `sudo mv qutebrowser-0.X.Y-windows/* /srv/http/qutebrowser/releases/v0.X.Y/windows`
+* Update `qutebrowser-git` PKGBUILD if dependencies/install changed
 * Announce to qutebrowser mailinglist

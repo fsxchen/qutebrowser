@@ -67,7 +67,6 @@ class Saveable:
                               save_on_exit=self._save_on_exit,
                               filename=self._filename)
 
-    @pyqtSlot()
     def mark_dirty(self):
         """Mark this saveable as dirty (having changes)."""
         log.save.debug("Marking {} as dirty.".format(self._name))
@@ -184,8 +183,10 @@ class SaveManager(QObject):
                 message.error('current', "Failed to auto-save {}: "
                               "{}".format(key, e))
 
-    @cmdutils.register(instance='save-manager', name='save', win_id='win_id')
-    def save_command(self, win_id, *what: {'nargs': '*'}):
+    @cmdutils.register(instance='save-manager', name='save',
+                       star_args_optional=True)
+    @cmdutils.argument('win_id', win_id=True)
+    def save_command(self, win_id, *what):
         """Save configs and state.
 
         Args:
@@ -208,3 +209,4 @@ class SaveManager(QObject):
                 except OSError as e:
                     message.error(win_id, "Could not save {}: "
                                   "{}".format(key, e))
+        log.save.debug(":save saved {}".format(', '.join(what)))

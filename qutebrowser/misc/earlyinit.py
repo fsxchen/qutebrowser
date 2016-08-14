@@ -44,21 +44,31 @@ except ImportError:
 # initialization needs to take place before that!
 
 
-def _missing_str(name, *, windows=None, pip=None):
+def _missing_str(name, *, windows=None, pip=None, webengine=False):
     """Get an error string for missing packages.
 
     Args:
         name: The name of the package.
         windows: String to be displayed for Windows.
         pip: pypi package name.
+        webengine: Whether this is checking the QtWebEngine package
     """
     blocks = ["Fatal error: <b>{}</b> is required to run qutebrowser but "
               "could not be imported! Maybe it's not installed?".format(name)]
     lines = ['Please search for the python3 version of {} in your '
              'distributions packages, or install it via pip.'.format(name)]
     blocks.append('<br />'.join(lines))
-    lines = ['<b>If you installed a qutebrowser package for your '
-             'distribution, please report this as a bug.</b>']
+    if webengine:
+        lines = [
+            'Note QtWebEngine is not available for some distributions '
+                '(like Debian/Ubuntu), so you need to start without '
+                '--backend webengine there.',
+            'QtWebEngine is currently unsupported with the OS X .app, see '
+                'https://github.com/The-Compiler/qutebrowser/issues/1692',
+        ]
+    else:
+        lines = ['<b>If you installed a qutebrowser package for your '
+                 'distribution, please report this as a bug.</b>']
     blocks.append('<br />'.join(lines))
     if windows is not None:
         lines = ["<b>On Windows:</b>"]
@@ -123,7 +133,8 @@ def init_faulthandler(fileobj=sys.__stderr__):
         # start.
         return
     faulthandler.enable(fileobj)
-    if hasattr(faulthandler, 'register') and hasattr(signal, 'SIGUSR1'):
+    if (hasattr(faulthandler, 'register') and hasattr(signal, 'SIGUSR1') and
+            sys.stderr is not None):
         # If available, we also want a traceback on SIGUSR1.
         # pylint: disable=no-member,useless-suppression
         faulthandler.register(signal.SIGUSR1)
@@ -159,8 +170,11 @@ def fix_harfbuzz(args):
     from qutebrowser.utils import log
     from PyQt5.QtCore import qVersion
     if 'PyQt5.QtWidgets' in sys.modules:
-        log.init.warning("Harfbuzz fix attempted but QtWidgets is already "
-                         "imported!")
+        msg = "Harfbuzz fix attempted but QtWidgets is already imported!"
+        if getattr(sys, 'frozen', False):
+            log.init.debug(msg)
+        else:
+            log.init.warning(msg)
     if sys.platform.startswith('linux') and args.harfbuzz == 'auto':
         if qVersion() == '5.3.0':
             log.init.debug("Using new harfbuzz engine (auto)")
@@ -168,7 +182,7 @@ def fix_harfbuzz(args):
         else:
             log.init.debug("Using old harfbuzz engine (auto)")
             os.environ['QT_HARFBUZZ'] = 'old'
-    elif args.harfbuzz in ('old', 'new'):
+    elif args.harfbuzz in ['old', 'new']:
         # forced harfbuzz variant
         # FIXME looking at the Qt code, 'new' isn't a valid value, but leaving
         # it empty and using new yields different behavior...
@@ -183,7 +197,7 @@ def fix_harfbuzz(args):
 def check_pyqt_core():
     """Check if PyQt core is installed."""
     try:
-        import PyQt5.QtCore
+        import PyQt5.QtCore  # pylint: disable=unused-variable
     except ImportError as e:
         text = _missing_str('PyQt5',
                             windows="Use the installer by Riverbank computing "
@@ -229,7 +243,7 @@ def check_ssl_support():
         _die(text)
 
 
-def check_libraries():
+def check_libraries(args):
     """Check if all needed Python libraries are installed."""
     modules = {
         'PyQt5.QtWebKit': _missing_str("PyQt5.QtWebKit"),
@@ -256,6 +270,9 @@ def check_libraries():
                                  "or Install via pip.",
                          pip="PyYAML"),
     }
+    if args.backend == 'webengine':
+        modules['PyQt5.QtWebEngineWidgets'] = _missing_str("QtWebEngine",
+                                                           webengine=True)
     for name, text in modules.items():
         try:
             importlib.import_module(name)
@@ -267,7 +284,8 @@ def remove_inputhook():
     """Remove the PyQt input hook.
 
     Doing this means we can't use the interactive shell anymore (which we don't
-    anyways), but we can use pdb instead."""
+    anyways), but we can use pdb instead.
+    """
     from PyQt5.QtCore import pyqtRemoveInputHook
     pyqtRemoveInputHook()
 
@@ -298,13 +316,14 @@ def earlyinit(args):
     # Here we check if QtCore is available, and if not, print a message to the
     # console or via Tk.
     check_pyqt_core()
+    # Init logging as early as possible
+    init_log(args)
     # Now the faulthandler is enabled we fix the Qt harfbuzzing library, before
     # importing QtWidgets.
     fix_harfbuzz(args)
     # Now we can be sure QtCore is available, so we can print dialogs on
     # errors, so people only using the GUI notice them as well.
     check_qt_version()
-    check_ssl_support()
     remove_inputhook()
-    check_libraries()
-    init_log(args)
+    check_libraries(args)
+    check_ssl_support()

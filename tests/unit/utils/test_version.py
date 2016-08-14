@@ -276,13 +276,24 @@ class ReleaseInfoFake:
 
 
 @pytest.mark.parametrize('files, expected', [
+    # no files -> no output
     ({}, []),
-    ({'file': ['']}, [('file', '')]),
-    ({'file': []}, [('file', '')]),
+    # empty files are stripped
+    ({'file': ['']}, []),
+    ({'file': []}, []),
+    # newlines at EOL are stripped
     (
         {'file1': ['foo\n', 'bar\n'], 'file2': ['baz\n']},
-        [('file1', 'foo\nbar\n'), ('file2', 'baz\n')]
+        [('file1', 'foo\nbar'), ('file2', 'baz')]
     ),
+    # blacklisted lines
+    (
+        {'file': ['HOME_URL=example.com\n', 'NAME=FOO']},
+        [('file', 'NAME=FOO')]
+    ),
+    # only blacklisted lines
+    ({'file': ['HOME_URL=example.com']}, []),
+    # broken file
     (None, []),
 ])
 def test_release_info(files, expected, caplog, monkeypatch):
@@ -319,13 +330,14 @@ class ImportFake:
     def __init__(self):
         self.exists = {
             'sip': True,
-            'colorlog': True,
             'colorama': True,
             'pypeg2': True,
             'jinja2': True,
             'pygments': True,
             'yaml': True,
             'cssutils': True,
+            'typing': True,
+            'PyQt5.QtWebEngineWidgets': True,
         }
         self.version_attribute = '__version__'
         self.version = '1.2.3'
@@ -383,15 +395,16 @@ class TestModuleVersions:
     @pytest.mark.usefixtures('import_fake')
     def test_all_present(self):
         """Test with all modules present in version 1.2.3."""
-        expected = ['sip: yes', 'colorlog: yes', 'colorama: 1.2.3',
-                    'pypeg2: 1.2.3', 'jinja2: 1.2.3', 'pygments: 1.2.3',
-                    'yaml: 1.2.3', 'cssutils: 1.2.3']
+        expected = ['sip: yes', 'colorama: 1.2.3', 'pypeg2: 1.2.3',
+                    'jinja2: 1.2.3', 'pygments: 1.2.3', 'yaml: 1.2.3',
+                    'cssutils: 1.2.3', 'typing: yes',
+                    'PyQt5.QtWebEngineWidgets: yes']
         assert version._module_versions() == expected
 
     @pytest.mark.parametrize('module, idx, expected', [
-        ('colorlog', 1, 'colorlog: no'),
-        ('colorama', 2, 'colorama: no'),
-        ('cssutils', 7, 'cssutils: no'),
+        ('colorama', 1, 'colorama: no'),
+        ('cssutils', 6, 'cssutils: no'),
+        ('typing', 7, 'typing: no'),
     ])
     def test_missing_module(self, module, idx, expected, import_fake):
         """Test with a module missing.
@@ -405,15 +418,17 @@ class TestModuleVersions:
         assert version._module_versions()[idx] == expected
 
     @pytest.mark.parametrize('value, expected', [
-        ('VERSION', ['sip: yes', 'colorlog: yes', 'colorama: 1.2.3',
-                     'pypeg2: yes', 'jinja2: yes', 'pygments: yes',
-                     'yaml: yes', 'cssutils: yes']),
-        ('SIP_VERSION_STR', ['sip: 1.2.3', 'colorlog: yes', 'colorama: yes',
-                             'pypeg2: yes', 'jinja2: yes', 'pygments: yes',
-                             'yaml: yes', 'cssutils: yes']),
-        (None, ['sip: yes', 'colorlog: yes', 'colorama: yes', 'pypeg2: yes',
-                'jinja2: yes', 'pygments: yes', 'yaml: yes',
-                'cssutils: yes']),
+        ('VERSION', ['sip: yes', 'colorama: 1.2.3', 'pypeg2: yes',
+                     'jinja2: yes', 'pygments: yes', 'yaml: yes',
+                     'cssutils: yes', 'typing: yes',
+                     'PyQt5.QtWebEngineWidgets: yes']),
+        ('SIP_VERSION_STR', ['sip: 1.2.3', 'colorama: yes', 'pypeg2: yes',
+                             'jinja2: yes', 'pygments: yes', 'yaml: yes',
+                             'cssutils: yes', 'typing: yes',
+                             'PyQt5.QtWebEngineWidgets: yes']),
+        (None, ['sip: yes', 'colorama: yes', 'pypeg2: yes', 'jinja2: yes',
+                'pygments: yes', 'yaml: yes', 'cssutils: yes', 'typing: yes',
+                'PyQt5.QtWebEngineWidgets: yes']),
     ])
     def test_version_attribute(self, value, expected, import_fake):
         """Test with a different version attribute.
@@ -429,7 +444,6 @@ class TestModuleVersions:
         assert version._module_versions() == expected
 
     @pytest.mark.parametrize('name, has_version', [
-        ('colorlog', False),
         ('sip', False),
         ('colorama', True),
         ('pypeg2', True),
@@ -442,7 +456,7 @@ class TestModuleVersions:
         """Check if all dependencies have an expected __version__ attribute.
 
         The aim of this test is to fail if modules suddenly don't have a
-        __version__ attribute anymore in a newer version, or colorlog has one.
+        __version__ attribute anymore in a newer version.
 
         Args:
             name: The name of the module to check.
@@ -545,24 +559,37 @@ class TestPDFJSVersion:
             lambda path: (b'foobar', None))
         assert version._pdfjs_version() == 'unknown (bundled)'
 
-    def test_known(self, monkeypatch):
+    @pytest.mark.parametrize('varname', [
+        'PDFJS.version',  # older versions
+        'var pdfjsVersion',  # newer versions
+    ])
+    def test_known(self, monkeypatch, varname):
         pdfjs_code = textwrap.dedent("""
             // Initializing PDFJS global object (if still undefined)
             if (typeof PDFJS === 'undefined') {
               (typeof window !== 'undefined' ? window : this).PDFJS = {};
             }
 
-            PDFJS.version = '1.2.109';
+            VARNAME = '1.2.109';
             PDFJS.build = '875588d';
 
             (function pdfjsWrapper() {
               // Use strict in our context only - users might not want it
               'use strict';
-        """).strip().encode('utf-8')
+        """.replace('VARNAME', varname)).strip().encode('utf-8')
         monkeypatch.setattr(
             'qutebrowser.utils.version.pdfjs.get_pdfjs_res_and_path',
             lambda path: (pdfjs_code, '/foo/bar/pdf.js'))
         assert version._pdfjs_version() == '1.2.109 (/foo/bar/pdf.js)'
+
+    def test_real_file(self):
+        """Test against the real file if pdfjs was found."""
+        try:
+            pdfjs.get_pdfjs_res_and_path('build/pdf.js')
+        except pdfjs.PDFJSNotFound:
+            pytest.skip("No pdfjs found")
+        ver = version._pdfjs_version()
+        assert ver.split()[0] not in ['no', 'unknown'], ver
 
 
 class FakeQSslSocket:
@@ -587,25 +614,28 @@ class FakeQSslSocket:
         return self._version
 
 
-@pytest.mark.parametrize('git_commit, harfbuzz, frozen, short', [
-    (True, True, False, False),  # normal
-    (False, True, False, False),  # no git commit
-    (True, False, False, False),  # HARFBUZZ unset
-    (True, True, True, False),  # frozen
-    (True, True, False, True),  # short
-    (False, True, False, True),  # short and no git commit
+@pytest.mark.parametrize('git_commit, harfbuzz, frozen, style, equal_qt', [
+    (True, True, False, True, True),  # normal
+    (False, True, False, True, True),  # no git commit
+    (True, False, False, True, True),  # HARFBUZZ unset
+    (True, True, True, True, True),  # frozen
+    (True, True, True, False, True),  # no style
+    (True, True, False, True, False),  # different Qt
 ])
-def test_version_output(git_commit, harfbuzz, frozen, short, stubs,
-                        monkeypatch):
+def test_version_output(git_commit, harfbuzz, frozen, style, equal_qt,
+                        stubs, monkeypatch):
     """Test version.version()."""
+    import_path = os.path.abspath('/IMPORTPATH')
     patches = {
+        'qutebrowser.__file__': os.path.join(import_path, '__init__.py'),
         'qutebrowser.__version__': 'VERSION',
         '_git_str': lambda: ('GIT COMMIT' if git_commit else None),
         'platform.python_implementation': lambda: 'PYTHON IMPLEMENTATION',
         'platform.python_version': lambda: 'PYTHON VERSION',
-        'QT_VERSION_STR': 'QT VERSION',
-        'qVersion': lambda: 'QT RUNTIME VERSION',
         'PYQT_VERSION_STR': 'PYQT VERSION',
+        'QT_VERSION_STR': 'QT VERSION',
+        'qVersion': (lambda:
+                     'QT VERSION' if equal_qt else 'QT RUNTIME VERSION'),
         '_module_versions': lambda: ['MODULE VERSION 1', 'MODULE VERSION 2'],
         '_pdfjs_version': lambda: 'PDFJS VERSION',
         'qWebKitVersion': lambda: 'WEBKIT VERSION',
@@ -613,7 +643,8 @@ def test_version_output(git_commit, harfbuzz, frozen, short, stubs,
         'platform.platform': lambda: 'PLATFORM',
         'platform.architecture': lambda: ('ARCHITECTURE', ''),
         '_os_info': lambda: ['OS INFO 1', 'OS INFO 2'],
-        'QApplication': stubs.FakeQApplication(style='STYLE'),
+        'QApplication': (stubs.FakeQApplication(style='STYLE') if style else
+                         stubs.FakeQApplication(instance=None)),
     }
 
     for attr, val in patches.items():
@@ -635,34 +666,33 @@ def test_version_output(git_commit, harfbuzz, frozen, short, stubs,
         qutebrowser vVERSION
         {git_commit}
         PYTHON IMPLEMENTATION: PYTHON VERSION
-        Qt: QT VERSION, runtime: QT RUNTIME VERSION
+        Qt: {qt}
         PyQt: PYQT VERSION
+
+        MODULE VERSION 1
+        MODULE VERSION 2
+        pdf.js: PDFJS VERSION
+        Webkit: WEBKIT VERSION
+        Harfbuzz: {harfbuzz}
+        SSL: SSL VERSION
+        {style}
+        Platform: PLATFORM, ARCHITECTURE
+        Desktop: DESKTOP
+        Frozen: {frozen}
+        Imported from {import_path}
+        OS INFO 1
+        OS INFO 2
     """.lstrip('\n'))
 
-    if git_commit:
-        substitutions = {'git_commit': 'Git commit: GIT COMMIT\n'}
-    else:
-        substitutions = {'git_commit': ''}
-
-    if not short:
-        template += textwrap.dedent("""
-            Style: STYLE
-            Desktop: DESKTOP
-            MODULE VERSION 1
-            MODULE VERSION 2
-            pdf.js: PDFJS VERSION
-            Webkit: WEBKIT VERSION
-            Harfbuzz: {harfbuzz}
-            SSL: SSL VERSION
-
-            Frozen: {frozen}
-            Platform: PLATFORM, ARCHITECTURE
-            OS INFO 1
-            OS INFO 2
-        """.lstrip('\n'))
-
-        substitutions['harfbuzz'] = 'HARFBUZZ' if harfbuzz else 'system'
-        substitutions['frozen'] = str(frozen)
+    substitutions = {
+        'git_commit': 'Git commit: GIT COMMIT\n' if git_commit else '',
+        'style': '\nStyle: STYLE' if style else '',
+        'qt': ('QT VERSION' if equal_qt else
+               'QT RUNTIME VERSION (compiled QT VERSION)'),
+        'harfbuzz': 'HARFBUZZ' if harfbuzz else 'system',
+        'frozen': str(frozen),
+        'import_path': import_path,
+    }
 
     expected = template.rstrip('\n').format(**substitutions)
-    assert version.version(short=short) == expected
+    assert version.version() == expected

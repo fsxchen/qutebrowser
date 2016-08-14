@@ -33,7 +33,7 @@ import contextlib
 import collections
 import collections.abc
 
-from PyQt5.QtCore import pyqtSignal, pyqtSlot, QObject, QUrl, QSettings
+from PyQt5.QtCore import pyqtSignal, QObject, QUrl, QSettings
 
 from qutebrowser.config import configdata, configexc, textwrapper
 from qutebrowser.config.parsers import ini, keyconf
@@ -94,8 +94,6 @@ class change_filter:  # pylint: disable=invalid-name
             The decorated function.
         """
         if self._function:
-            @pyqtSlot(str, str)
-            @pyqtSlot()
             @functools.wraps(func)
             def wrapper(sectname=None, optname=None):
                 if sectname is None and optname is None:
@@ -108,8 +106,6 @@ class change_filter:  # pylint: disable=invalid-name
                 else:
                     return func()
         else:
-            @pyqtSlot(str, str)
-            @pyqtSlot()
             @functools.wraps(func)
             def wrapper(wrapper_self, sectname=None, optname=None):
                 if sectname is None and optname is None:
@@ -211,7 +207,7 @@ def _init_misc():
     """Initialize misc. config-related files."""
     save_manager = objreg.get('save-manager')
     state_config = ini.ReadWriteConfigParser(standarddir.data(), 'state')
-    for sect in ('general', 'geometry'):
+    for sect in ['general', 'geometry']:
         try:
             state_config.add_section(sect)
         except configparser.DuplicateSectionError:
@@ -242,7 +238,7 @@ def _init_misc():
         path = os.devnull
     else:
         path = os.path.join(standarddir.config(), 'qsettings')
-    for fmt in (QSettings.NativeFormat, QSettings.IniFormat):
+    for fmt in [QSettings.NativeFormat, QSettings.IniFormat]:
         QSettings.setPath(fmt, QSettings.UserScope, path)
 
 
@@ -310,7 +306,7 @@ class ConfigManager(QObject):
         sections: The configuration data as an OrderedDict.
         _fname: The filename to be opened.
         _configdir: The dictionary to read the config from and save it in.
-        _interpolation: An configparser.Interpolation object
+        _interpolation: A configparser.Interpolation object
         _proxies: configparser.SectionProxy objects for sections.
         _initialized: Whether the ConfigManager is fully initialized yet.
 
@@ -341,15 +337,20 @@ class ConfigManager(QObject):
         ('colors', 'tab.indicator.system'): 'tabs.indicator.system',
         ('completion', 'history-length'): 'cmd-history-max-items',
         ('colors', 'downloads.fg'): 'downloads.fg.start',
+        ('ui', 'show-keyhints'): 'keyhint-blacklist',
     }
     DELETED_OPTIONS = [
         ('colors', 'tab.separator'),
         ('colors', 'tabs.separator'),
+        ('colors', 'tab.seperator'),  # pragma: no spellcheck
+        ('colors', 'tabs.seperator'),  # pragma: no spellcheck
         ('colors', 'completion.item.bg'),
         ('tabs', 'indicator-space'),
         ('tabs', 'hide-auto'),
         ('tabs', 'auto-hide'),
         ('tabs', 'hide-always'),
+        ('ui', 'display-statusbar-messages'),
+        ('general', 'wrap-search'),
     ]
     CHANGED_OPTIONS = {
         ('content', 'cookies-accept'):
@@ -360,6 +361,8 @@ class ConfigManager(QObject):
             _get_value_transformer({'false': '-1', 'true': '1000'}),
         ('general', 'log-javascript-console'):
             _get_value_transformer({'false': 'none', 'true': 'debug'}),
+        ('ui', 'keyhint-blacklist'):
+            _get_value_transformer({'false': '*', 'true': ''}),
     }
 
     changed = pyqtSignal(str, str)
@@ -491,7 +494,7 @@ class ConfigManager(QObject):
         for sectname in cp:
             if sectname in self.RENAMED_SECTIONS:
                 sectname = self.RENAMED_SECTIONS[sectname]
-            if sectname is not 'DEFAULT' and sectname not in self.sections:
+            if sectname != 'DEFAULT' and sectname not in self.sections:
                 if not relaxed:
                     raise configexc.NoSectionError(sectname)
         for sectname in self.sections:
@@ -513,7 +516,7 @@ class ConfigManager(QObject):
                 k = k[1:]
 
             if (sectname, k) in self.DELETED_OPTIONS:
-                return
+                continue
             if (sectname, k) in self.RENAMED_OPTIONS:
                 k = self.RENAMED_OPTIONS[sectname, k]
             if (sectname, k) in self.CHANGED_OPTIONS:
@@ -546,7 +549,7 @@ class ConfigManager(QObject):
         """Notify other objects the config has changed."""
         log.config.debug("Config option changed: {} -> {}".format(
             sectname, optname))
-        if sectname in ('colors', 'fonts'):
+        if sectname in ['colors', 'fonts']:
             self.style_changed.emit(sectname, optname)
         self.changed.emit(sectname, optname)
 
@@ -686,9 +689,11 @@ class ConfigManager(QObject):
             raise cmdexc.CommandError("set: {} - {}".format(
                 e.__class__.__name__, e))
 
-    @cmdutils.register(name='set', instance='config', win_id='win_id',
-                       completion=[Completion.section, Completion.option,
-                                   Completion.value])
+    @cmdutils.register(name='set', instance='config')
+    @cmdutils.argument('section_', completion=Completion.section)
+    @cmdutils.argument('option', completion=Completion.option)
+    @cmdutils.argument('value', completion=Completion.value)
+    @cmdutils.argument('win_id', win_id=True)
     def set_command(self, win_id, section_=None, option=None, value=None,
                     temp=False, print_=False):
         """Set an option.
@@ -729,7 +734,7 @@ class ConfigManager(QObject):
                     val = self.get(section_, option)
                     layer = 'temp' if temp else 'conf'
                     if isinstance(val, bool):
-                        self.set(layer, section_, option, str(not val))
+                        self.set(layer, section_, option, str(not val).lower())
                     else:
                         raise cmdexc.CommandError(
                             "set: Attempted inversion of non-boolean value.")

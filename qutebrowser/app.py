@@ -31,7 +31,7 @@ import atexit
 import datetime
 import tokenize
 
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QWidget
 from PyQt5.QtWebKit import QWebSettings
 from PyQt5.QtGui import QDesktopServices, QPixmap, QIcon, QCursor, QWindow
 from PyQt5.QtCore import (pyqtSlot, qInstallMessageHandler, QTimer, QUrl,
@@ -46,8 +46,10 @@ import qutebrowser.resources
 from qutebrowser.completion.models import instances as completionmodels
 from qutebrowser.commands import cmdutils, runners, cmdexc
 from qutebrowser.config import style, config, websettings, configexc
-from qutebrowser.browser import urlmarks, cookies, cache, adblock, history
-from qutebrowser.browser.network import qutescheme, proxy, networkmanager
+from qutebrowser.browser import urlmarks, adblock
+from qutebrowser.browser.webkit import cookies, cache, history, downloads
+from qutebrowser.browser.webkit.network import (qutescheme, proxy,
+                                                networkmanager)
 from qutebrowser.mainwindow import mainwindow
 from qutebrowser.misc import readline, ipc, savemanager, sessions, crashsignal
 from qutebrowser.misc import utilcmds  # pylint: disable=unused-import
@@ -62,12 +64,7 @@ qApp = None
 def run(args):
     """Initialize everything and run the application."""
     if args.version:
-        print(version.version(short=True))
-        print()
-        print()
-        print(qutebrowser.__copyright__)
-        print()
-        print(version.GPL_BOILERPLATE.strip())
+        print(version.version())
         sys.exit(usertypes.Exit.ok)
 
     if args.temp_basedir:
@@ -166,7 +163,7 @@ def _init_icon():
     """Initialize the icon of qutebrowser."""
     icon = QIcon()
     fallback_icon = QIcon()
-    for size in (16, 24, 32, 48, 64, 96, 128, 256, 512):
+    for size in [16, 24, 32, 48, 64, 96, 128, 256, 512]:
         filename = ':/icons/qutebrowser-{}x{}.png'.format(size, size)
         pixmap = QPixmap(filename)
         qtutils.ensure_not_null(pixmap)
@@ -278,8 +275,9 @@ def process_pos_args(args, via_ipc=False, cwd=None, target_arg=None):
                 message.error('current', "Error in startup argument '{}': "
                               "{}".format(cmd, e))
             else:
-                background = open_target in ('tab-bg', 'tab-bg-silent')
-                tabbed_browser.tabopen(url, background=background)
+                background = open_target in ['tab-bg', 'tab-bg-silent']
+                tabbed_browser.tabopen(url, background=background,
+                                       explicit=True)
 
 
 def _open_startpage(win_id=None):
@@ -339,27 +337,25 @@ def _save_version():
     state_config['general']['version'] = qutebrowser.__version__
 
 
-@pyqtSlot('QWidget*', 'QWidget*')
 def on_focus_changed(_old, new):
     """Register currently focused main window in the object registry."""
-    if new is None:
-        window = None
-    else:
-        window = new.window()
-    if window is None or not isinstance(window, mainwindow.MainWindow):
+    if not isinstance(new, QWidget):
+        log.misc.debug("on_focus_changed called with non-QWidget {!r}".format(
+            new))
+
+    if new is None or not isinstance(new, mainwindow.MainWindow):
         try:
             objreg.delete('last-focused-main-window')
         except KeyError:
             pass
         qApp.restoreOverrideCursor()
     else:
-        objreg.register('last-focused-main-window', window, update=True)
+        objreg.register('last-focused-main-window', new.window(), update=True)
         _maybe_hide_mouse_cursor()
 
 
-@pyqtSlot(QUrl)
 def open_desktopservices_url(url):
-    """Handler to open an URL via QDesktopServices."""
+    """Handler to open a URL via QDesktopServices."""
     win_id = mainwindow.get_window(via_ipc=True, force_window=False)
     tabbed_browser = objreg.get('tabbed-browser', scope='window',
                                 window=win_id)
@@ -425,7 +421,9 @@ def _init_modules(args, crash_handler):
     proxy.init()
     log.init.debug("Initializing cookies...")
     cookie_jar = cookies.CookieJar(qApp)
+    ram_cookie_jar = cookies.RAMCookieJar(qApp)
     objreg.register('cookie-jar', cookie_jar)
+    objreg.register('ram-cookie-jar', ram_cookie_jar)
     log.init.debug("Initializing cache...")
     diskcache = cache.DiskCache(standarddir.cache(), parent=qApp)
     objreg.register('cache', diskcache)
@@ -438,6 +436,8 @@ def _init_modules(args, crash_handler):
         os.environ.pop('QT_WAYLAND_DISABLE_WINDOWDECORATION', None)
     _maybe_hide_mouse_cursor()
     objreg.get('config').changed.connect(_maybe_hide_mouse_cursor)
+    temp_downloads = downloads.TempDownloadManager(qApp)
+    objreg.register('temporary-downloads', temp_downloads)
 
 
 def _init_late_modules(args):
@@ -476,7 +476,6 @@ class Quitter:
         self._shutting_down = False
         self._args = args
 
-    @pyqtSlot()
     def on_last_window_closed(self):
         """Slot which gets invoked when the last window was closed."""
         self.shutdown(last_window=True)
@@ -491,12 +490,12 @@ class Quitter:
         else:
             path = os.path.abspath(os.path.dirname(qutebrowser.__file__))
             if not os.path.isdir(path):
-                # Probably running from an python egg.
+                # Probably running from a python egg.
                 return
 
         for dirpath, _dirnames, filenames in os.walk(path):
             for fn in filenames:
-                if os.path.splitext(fn)[1] == '.py':
+                if os.path.splitext(fn)[1] == '.py' and os.path.isfile(fn):
                     with tokenize.open(os.path.join(dirpath, fn)) as f:
                         compile(f.read(), fn, 'exec')
 
@@ -524,7 +523,7 @@ class Quitter:
             cwd = os.path.join(os.path.abspath(os.path.dirname(
                                qutebrowser.__file__)), '..')
             if not os.path.isdir(cwd):
-                # Probably running from an python egg. Let's fallback to
+                # Probably running from a python egg. Let's fallback to
                 # cwd=None and see if that works out.
                 # See https://github.com/The-Compiler/qutebrowser/issues/323
                 cwd = None
@@ -711,6 +710,8 @@ class Quitter:
                 not restart):
             atexit.register(shutil.rmtree, self._args.basedir,
                             ignore_errors=True)
+        # Delete temp download dir
+        objreg.get('temporary-downloads').cleanup()
         # If we don't kill our custom handler here we might get segfaults
         log.destroy.debug("Deactivating message handler...")
         qInstallMessageHandler(None)
@@ -721,8 +722,8 @@ class Quitter:
         # segfaults.
         QTimer.singleShot(0, functools.partial(qApp.exit, status))
 
-    @cmdutils.register(instance='quitter', name='wq',
-                       completion=[usertypes.Completion.sessions])
+    @cmdutils.register(instance='quitter', name='wq')
+    @cmdutils.argument('name', completion=usertypes.Completion.sessions)
     def save_and_quit(self, name=sessions.default):
         """Save open pages and quit.
 

@@ -20,16 +20,15 @@
 """Global instances of the completion models.
 
 Module attributes:
-    _instances: An dict of available completions.
+    _instances: A dict of available completions.
     INITIALIZERS: A {usertypes.Completion: callable} dict of functions to
                   initialize completions.
 """
 
 import functools
 
-from PyQt5.QtCore import pyqtSlot
-
-from qutebrowser.completion.models import miscmodels, urlmodel, configmodel
+from qutebrowser.completion.models import (miscmodels, urlmodel, configmodel,
+                                           base)
 from qutebrowser.utils import objreg, usertypes, log, debug
 from qutebrowser.config import configdata
 
@@ -83,7 +82,6 @@ def _init_setting_completions():
             _instances[usertypes.Completion.value][sectname][opt] = val_model
 
 
-@pyqtSlot()
 def init_quickmark_completions():
     """Initialize quickmark completion models."""
     log.completion.debug("Initializing quickmark completion.")
@@ -95,7 +93,6 @@ def init_quickmark_completions():
     _instances[usertypes.Completion.quickmark_by_name] = model
 
 
-@pyqtSlot()
 def init_bookmark_completions():
     """Initialize bookmark completion models."""
     log.completion.debug("Initializing bookmark completion.")
@@ -107,7 +104,6 @@ def init_bookmark_completions():
     _instances[usertypes.Completion.bookmark_by_url] = model
 
 
-@pyqtSlot()
 def init_session_completion():
     """Initialize session completion model."""
     log.completion.debug("Initializing session completion.")
@@ -117,6 +113,13 @@ def init_session_completion():
         pass
     model = miscmodels.SessionCompletionModel()
     _instances[usertypes.Completion.sessions] = model
+
+
+def _init_empty_completion():
+    """Initialize empty completion model."""
+    log.completion.debug("Initializing empty completion.")
+    if usertypes.Completion.empty not in _instances:
+        _instances[usertypes.Completion.empty] = base.BaseCompletionModel()
 
 
 INITIALIZERS = {
@@ -130,6 +133,7 @@ INITIALIZERS = {
     usertypes.Completion.quickmark_by_name: init_quickmark_completions,
     usertypes.Completion.bookmark_by_url: init_bookmark_completions,
     usertypes.Completion.sessions: init_session_completion,
+    usertypes.Completion.empty: _init_empty_completion,
 }
 
 
@@ -177,3 +181,7 @@ def init():
     history = objreg.get('web-history')
     history.async_read_done.connect(
         functools.partial(update, [usertypes.Completion.url]))
+
+    keyconf = objreg.get('key-config')
+    keyconf.changed.connect(
+        functools.partial(update, [usertypes.Completion.command]))

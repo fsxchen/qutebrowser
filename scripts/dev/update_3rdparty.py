@@ -31,7 +31,8 @@ import os
 def get_latest_pdfjs_url():
     """Get the URL of the latest pdf.js prebuilt package.
 
-    Returns a (version, url)-tuple."""
+    Returns a (version, url)-tuple.
+    """
     github_api = 'https://api.github.com'
     endpoint = 'repos/mozilla/pdf.js/releases/latest'
     request_url = '{}/{}'.format(github_api, endpoint)
@@ -64,6 +65,8 @@ def update_pdfjs(target_version=None):
         url = ('https://github.com/mozilla/pdf.js/releases/download/'
                'v{0}/pdfjs-{0}-dist.zip').format(target_version)
 
+    os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          '..', '..'))
     target_path = os.path.join('qutebrowser', '3rdparty', 'pdfjs')
     print("=> Downloading pdf.js {}".format(version))
     try:
@@ -81,6 +84,18 @@ def update_pdfjs(target_version=None):
     urllib.request.urlcleanup()
 
 
+def update_dmg_makefile():
+    """Update fancy-dmg Makefile.
+
+    See https://el-tramo.be/blog/fancy-dmg/
+    """
+    print("Updating fancy-dmg Makefile...")
+    url = 'https://raw.githubusercontent.com/remko/fancy-dmg/master/Makefile'
+    target_path = os.path.join('scripts', 'dev', 'Makefile-dmg')
+    urllib.request.urlretrieve(url, target_path)
+    urllib.request.urlcleanup()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -88,9 +103,14 @@ def main():
         help='Specify pdfjs version. If not given, '
         'the latest version is used.',
         required=False, metavar='VERSION')
+    parser.add_argument('--fancy-dmg', help="Update fancy-dmg Makefile",
+                        action='store_true')
     args = parser.parse_args()
 
     update_pdfjs(args.pdfjs)
+    if args.fancy_dmg:
+        update_dmg_makefile()
+
 
 if __name__ == '__main__':
     main()

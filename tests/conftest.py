@@ -21,9 +21,11 @@
 
 """The qutebrowser test suite conftest file."""
 
+import re
 import os
 import sys
 import warnings
+import operator
 
 import pytest
 import hypothesis
@@ -34,6 +36,8 @@ from helpers.messagemock import message_mock
 from helpers.fixtures import *  # pylint: disable=wildcard-import
 
 from PyQt5.QtCore import PYQT_VERSION
+
+from qutebrowser.utils import qtutils
 
 
 # Set hypothesis settings
@@ -54,8 +58,6 @@ def _apply_platform_markers(item):
             "Can't be run when frozen"),
         ('frozen', not getattr(sys, 'frozen', False),
             "Can only run when frozen"),
-        ('pyqt531_or_newer', PYQT_VERSION < 0x050301,
-            "Needs PyQt 5.3.1 or newer"),
         ('ci', 'CI' not in os.environ, "Only runs on CI."),
     ]
 
@@ -100,13 +102,6 @@ def pytest_collection_modifyitems(items):
     for item in items:
         if 'qapp' in getattr(item, 'fixturenames', ()):
             item.add_marker('gui')
-            if sys.platform == 'linux' and not os.environ.get('DISPLAY', ''):
-                if ('CI' in os.environ and
-                        not os.environ.get('QUTE_NO_DISPLAY', '')):
-                    raise Exception("No display available on CI!")
-                skip_marker = pytest.mark.skipif(
-                    True, reason="No DISPLAY available")
-                item.add_marker(skip_marker)
 
         if hasattr(item, 'module'):
             module_path = os.path.relpath(
@@ -114,18 +109,20 @@ def pytest_collection_modifyitems(items):
                 os.path.commonprefix([__file__, item.module.__file__]))
 
             module_root_dir = os.path.split(module_path)[0]
-            if module_root_dir == 'integration':
-                item.add_marker(pytest.mark.integration)
+            if module_root_dir == 'end2end':
+                item.add_marker(pytest.mark.end2end)
 
         _apply_platform_markers(item)
         if item.get_marker('xfail_norun'):
             item.add_marker(pytest.mark.xfail(run=False))
+        if item.get_marker('flaky_once'):
+            item.add_marker(pytest.mark.flaky(reruns=1))
 
 
 def pytest_ignore_collect(path):
     """Ignore BDD tests during collection if frozen."""
     rel_path = path.relto(os.path.dirname(__file__))
-    return (rel_path == os.path.join('integration', 'features') and
+    return (rel_path == os.path.join('end2end', 'features') and
             hasattr(sys, 'frozen'))
 
 
@@ -148,14 +145,19 @@ def pytest_addoption(parser):
                      help="Delay between qutebrowser commands.")
     parser.addoption('--qute-profile-subprocs', action='store_true',
                      default=False, help="Run cProfile for subprocesses.")
+    parser.addoption('--qute-bdd-webengine', action='store_true',
+                     help='Use QtWebEngine for BDD tests')
 
 
 @pytest.fixture(scope='session', autouse=True)
-def prevent_xvfb_on_buildbot(request):
+def check_display(request):
     if (not request.config.getoption('--no-xvfb') and
             'QUTE_BUILDBOT' in os.environ and
             request.config.xvfb is not None):
         raise Exception("Xvfb is running on buildbot!")
+
+    if sys.platform == 'linux' and not os.environ.get('DISPLAY', ''):
+        raise Exception("No display and no Xvfb available!")
 
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
@@ -167,3 +169,69 @@ def pytest_runtest_makereport(item, call):
     outcome = yield
     rep = outcome.get_result()
     setattr(item, "rep_" + rep.when, rep)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_sessionfinish(exitstatus):
+    """Create a file to tell run_pytest.py how pytest exited."""
+    outcome = yield
+    outcome.get_result()
+
+    cache_dir = os.path.join(os.path.abspath(os.path.dirname(__file__)),
+                             '..', '.cache')
+    try:
+        os.mkdir(cache_dir)
+    except FileExistsError:
+        pass
+
+    status_file = os.path.join(cache_dir, 'pytest_status')
+    with open(status_file, 'w', encoding='ascii') as f:
+        f.write(str(exitstatus))
+
+
+if not getattr(sys, 'frozen', False):
+    def pytest_bdd_apply_tag(tag, function):
+        """Handle tags like pyqt>=5.3.1 for BDD tests.
+
+        This transforms e.g. pyqt>=5.3.1 into an appropriate @pytest.mark.skip
+        marker, and falls back to pytest-bdd's implementation for all other
+        casesinto an appropriate @pytest.mark.skip marker, and falls back to
+        pytest-bdd's implementation for all other cases
+        """
+        version_re = re.compile(r"""
+            (?P<package>qt|pyqt)
+            (?P<operator>==|>|>=|<|<=|!=)
+            (?P<version>\d+\.\d+\.\d+)
+        """, re.VERBOSE)
+
+        match = version_re.match(tag)
+        if not match:
+            # Use normal tag mapping
+            return None
+
+        operators = {
+            '==': operator.eq,
+            '>': operator.gt,
+            '<': operator.lt,
+            '>=': operator.ge,
+            '<=': operator.le,
+            '!=': operator.ne,
+        }
+
+        package = match.group('package')
+        op = operators[match.group('operator')]
+        version = match.group('version')
+
+        if package == 'qt':
+            mark = pytest.mark.skipif(qtutils.version_check(version, op),
+                                      reason='Needs ' + tag)
+        elif package == 'pyqt':
+            major, minor, patch = [int(e) for e in version.split('.')]
+            hex_version = (major << 16) | (minor << 8) | patch
+            mark = pytest.mark.skipif(not op(PYQT_VERSION, hex_version),
+                                      reason='Needs ' + tag)
+        else:
+            raise ValueError("Invalid package {!r}".format(package))
+
+        mark(function)
+        return True

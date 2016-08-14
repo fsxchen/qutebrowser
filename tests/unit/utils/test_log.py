@@ -23,6 +23,7 @@ import logging
 import argparse
 import itertools
 import sys
+import warnings
 
 import pytest
 import pytest_catchlog
@@ -36,6 +37,7 @@ def restore_loggers():
 
     Based on CPython's Lib/test/test_logging.py.
     """
+    logging.captureWarnings(False)
     logger_dict = logging.getLogger().manager.loggerDict
     logging._acquireLock()
     try:
@@ -218,7 +220,8 @@ class TestInitLog:
     def args(self):
         """Fixture providing an argparse namespace for init_log."""
         return argparse.Namespace(debug=True, loglevel='debug', color=True,
-                                  loglines=10, logfilter="")
+                                  loglines=10, logfilter="", force_color=False,
+                                  json_logging=False)
 
     def test_stderr_none(self, args):
         """Test init_log with sys.stderr = None."""
@@ -266,3 +269,25 @@ class TestHideQtWarning:
             with caplog.at_level(logging.WARNING, 'qt-tests'):
                 logger.warning("  Hello World  ")
         assert not caplog.records
+
+
+@pytest.mark.parametrize('suffix, expected', [
+    ('', 'STUB: test_stub'),
+    ('foo', 'STUB: test_stub (foo)'),
+])
+def test_stub(caplog, suffix, expected):
+    with caplog.at_level(logging.WARNING, 'misc'):
+        log.stub(suffix)
+    assert len(caplog.records) == 1
+    assert caplog.records[0].message == expected
+
+
+def test_ignore_py_warnings(caplog):
+    logging.captureWarnings(True)
+    with log.ignore_py_warnings(category=UserWarning):
+        warnings.warn("hidden", UserWarning)
+    with caplog.at_level(logging.WARNING):
+        warnings.warn("not hidden", UserWarning)
+    assert len(caplog.records) == 1
+    msg = caplog.records[0].message.splitlines()[0]
+    assert msg.endswith("UserWarning: not hidden")
