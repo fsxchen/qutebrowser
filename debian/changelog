@@ -1,6 +1,7 @@
-qutebrowser (0.8.4-1~exp1) UNRELEASED; urgency=medium
+qutebrowser (0.9.1-1) UNRELEASED; urgency=medium
 
   * New upstream release.
+  * Upload to unstable.
 
  -- Mateusz Łukasik <mati75@linuxmint.pl>  Tue, 08 Nov 2016 11:22:55 +0100
 
