@@ -21,12 +21,15 @@
 
 import os.path
 import collections
+import logging
 
 from PyQt5.QtCore import QUrl
+from PyQt5.QtNetwork import QNetworkProxy
 import pytest
 
 from qutebrowser.commands import cmdexc
-from qutebrowser.utils import utils, urlutils, qtutils
+from qutebrowser.browser.network import pac
+from qutebrowser.utils import utils, urlutils, qtutils, usertypes
 
 
 class FakeDNS:
@@ -104,13 +107,6 @@ def urlutils_config_stub(config_stub, monkeypatch):
     }
     monkeypatch.setattr('qutebrowser.utils.urlutils.config', config_stub)
     return config_stub
-
-
-@pytest.fixture
-def urlutils_message_mock(message_mock):
-    """Customized message_mock for the urlutils module."""
-    message_mock.patch('qutebrowser.utils.urlutils.message')
-    return message_mock
 
 
 class TestFuzzyUrl:
@@ -225,13 +221,15 @@ class TestFuzzyUrl:
         (True, qtutils.QtValueError),
         (False, urlutils.InvalidUrlError),
     ])
-    def test_invalid_url(self, do_search, exception, is_url_mock, monkeypatch):
+    def test_invalid_url(self, do_search, exception, is_url_mock, monkeypatch,
+                         caplog):
         """Test with an invalid URL."""
         is_url_mock.return_value = True
         monkeypatch.setattr('qutebrowser.utils.urlutils.qurl_from_user_input',
                             lambda url: QUrl())
         with pytest.raises(exception):
-            urlutils.fuzzy_url('foo', do_search=do_search)
+            with caplog.at_level(logging.ERROR):
+                urlutils.fuzzy_url('foo', do_search=do_search)
 
     @pytest.mark.parametrize('url', ['', ' '])
     def test_empty(self, url):
@@ -336,6 +334,8 @@ def test_get_search_url_invalid(urlutils_config_stub, url):
     (False, True, False, '23.42'),  # no DNS because bogus-IP
     (False, True, False, '1337'),  # no DNS because bogus-IP
     (False, True, True, 'deadbeef'),
+    (False, True, True, 'hello.'),
+    (False, True, False, 'site:cookies.com oatmeal raisin'),
     # no DNS because bogus-IP
     pytest.mark.xfail(qtutils.version_check('5.6.1'),
                       reason='Qt behavior changed')(
@@ -346,8 +346,9 @@ def test_get_search_url_invalid(urlutils_config_stub, url):
     # autosearch = False
     (False, True, False, 'This is a URL without autosearch'),
 ])
+@pytest.mark.parametrize('auto_search', ['dns', 'naive', False])
 def test_is_url(urlutils_config_stub, fake_dns, is_url, is_url_no_autosearch,
-                uses_dns, url):
+                uses_dns, url, auto_search):
     """Test is_url().
 
     Args:
@@ -357,33 +358,36 @@ def test_is_url(urlutils_config_stub, fake_dns, is_url, is_url_no_autosearch,
         uses_dns: Whether the given string should fire a DNS request for the
                   given URL.
         url: The URL to test, as a string.
+        auto_search: With which auto-search setting to test
     """
-    urlutils_config_stub.data['general']['auto-search'] = 'dns'
-    if uses_dns:
-        fake_dns.answer = True
-        result = urlutils.is_url(url)
-        assert fake_dns.used
-        assert result
-        fake_dns.reset()
+    urlutils_config_stub.data['general']['auto-search'] = auto_search
+    if auto_search == 'dns':
+        if uses_dns:
+            fake_dns.answer = True
+            result = urlutils.is_url(url)
+            assert fake_dns.used
+            assert result
+            fake_dns.reset()
 
-        fake_dns.answer = False
-        result = urlutils.is_url(url)
-        assert fake_dns.used
-        assert not result
-    else:
-        result = urlutils.is_url(url)
+            fake_dns.answer = False
+            result = urlutils.is_url(url)
+            assert fake_dns.used
+            assert not result
+        else:
+            result = urlutils.is_url(url)
+            assert not fake_dns.used
+            assert result == is_url
+    elif auto_search == 'naive':
+        urlutils_config_stub.data['general']['auto-search'] = 'naive'
+        assert urlutils.is_url(url) == is_url
         assert not fake_dns.used
-        assert result == is_url
-
-    fake_dns.reset()
-    urlutils_config_stub.data['general']['auto-search'] = 'naive'
-    assert urlutils.is_url(url) == is_url
-    assert not fake_dns.used
-
-    fake_dns.reset()
-    urlutils_config_stub.data['general']['auto-search'] = False
-    assert urlutils.is_url(url) == is_url_no_autosearch
-    assert not fake_dns.used
+    elif not auto_search:
+        urlutils_config_stub.data['general']['auto-search'] = False
+        assert urlutils.is_url(url) == is_url_no_autosearch
+        assert not fake_dns.used
+    else:
+        raise ValueError("Invalid value {!r} for auto-search!".format(
+            auto_search))
 
 
 @pytest.mark.parametrize('user_input, output', [
@@ -414,7 +418,7 @@ def test_qurl_from_user_input(user_input, output):
     ('', False, False),
     ('://', False, True),
 ])
-def test_invalid_url_error(urlutils_message_mock, url, valid, has_err_string):
+def test_invalid_url_error(message_mock, caplog, url, valid, has_err_string):
     """Test invalid_url_error().
 
     Args:
@@ -426,13 +430,14 @@ def test_invalid_url_error(urlutils_message_mock, url, valid, has_err_string):
     assert qurl.isValid() == valid
     if valid:
         with pytest.raises(ValueError):
-            urlutils.invalid_url_error(0, qurl, '')
-        assert not urlutils_message_mock.messages
+            urlutils.invalid_url_error(qurl, '')
+        assert not message_mock.messages
     else:
         assert bool(qurl.errorString()) == has_err_string
-        urlutils.invalid_url_error(0, qurl, 'frozzle')
+        with caplog.at_level(logging.ERROR):
+            urlutils.invalid_url_error(qurl, 'frozzle')
 
-        msg = urlutils_message_mock.getmsg(urlutils_message_mock.Level.error)
+        msg = message_mock.getmsg(usertypes.MessageLevel.error)
         if has_err_string:
             expected_text = ("Trying to frozzle with invalid URL - " +
                              qurl.errorString())
@@ -620,6 +625,33 @@ class TestIncDecNumber:
             base_url, incdec, segments={'host', 'path', 'query', 'anchor'})
         assert new_url == expected_url
 
+    @pytest.mark.parametrize('incdec', ['increment', 'decrement'])
+    @pytest.mark.parametrize('value', [
+        '{}foo', 'foo{}', 'foo{}bar', '42foo{}'
+    ])
+    @pytest.mark.parametrize('url', [
+        'http://example.com:80/v1/path/{}/test',
+        'http://example.com:80/v1/query_test?value={}',
+        'http://example.com:80/v1/anchor_test#{}',
+        'http://host_{}_test.com:80',
+        'http://m4ny.c0m:80/number5/3very?where=yes#{}'
+    ])
+    @pytest.mark.parametrize('count', [1, 5, 100])
+    def test_incdec_number_count(self, incdec, value, url, count):
+        """Test incdec_number with valid URLs and a count."""
+        base_value = value.format(20)
+        if incdec == 'increment':
+            expected_value = value.format(20 + count)
+        else:
+            expected_value = value.format(20 - count)
+
+        base_url = QUrl(url.format(base_value))
+        expected_url = QUrl(url.format(expected_value))
+        new_url = urlutils.incdec_number(
+            base_url, incdec, count,
+            segments={'host', 'path', 'query', 'anchor'})
+        assert new_url == expected_url
+
     @pytest.mark.parametrize('number, expected, incdec', [
         ('01', '02', 'increment'),
         ('09', '10', 'increment'),
@@ -701,3 +733,47 @@ class TestIncDecNumber:
 
 def test_file_url():
     assert urlutils.file_url('/foo/bar') == 'file:///foo/bar'
+
+
+def test_data_url():
+    url = urlutils.data_url('text/plain', b'foo')
+    assert url == QUrl('data:text/plain;base64,Zm9v')
+
+
+class TestProxyFromUrl:
+
+    @pytest.mark.parametrize('url, expected', [
+        ('socks://example.com/',
+            QNetworkProxy(QNetworkProxy.Socks5Proxy, 'example.com')),
+        ('socks5://example.com',
+            QNetworkProxy(QNetworkProxy.Socks5Proxy, 'example.com')),
+        ('socks5://example.com:2342',
+            QNetworkProxy(QNetworkProxy.Socks5Proxy, 'example.com', 2342)),
+        ('socks5://foo@example.com',
+            QNetworkProxy(QNetworkProxy.Socks5Proxy, 'example.com', 0, 'foo')),
+        ('socks5://foo:bar@example.com',
+            QNetworkProxy(QNetworkProxy.Socks5Proxy, 'example.com', 0, 'foo',
+                          'bar')),
+        ('socks5://foo:bar@example.com:2323',
+            QNetworkProxy(QNetworkProxy.Socks5Proxy, 'example.com', 2323,
+                          'foo', 'bar')),
+        ('direct://', QNetworkProxy(QNetworkProxy.NoProxy)),
+    ])
+    def test_proxy_from_url_valid(self, url, expected):
+        assert urlutils.proxy_from_url(QUrl(url)) == expected
+
+    @pytest.mark.parametrize('scheme', ['pac+http', 'pac+https'])
+    def test_proxy_from_url_pac(self, scheme):
+        fetcher = urlutils.proxy_from_url(QUrl('{}://foo'.format(scheme)))
+        assert fetcher is pac.PACFetcher
+
+    @pytest.mark.parametrize('url, exception', [
+        ('blah', urlutils.InvalidProxyTypeError),
+        (':', urlutils.InvalidUrlError),  # invalid URL
+        # Invalid/unsupported scheme
+        ('ftp://example.com/', urlutils.InvalidProxyTypeError),
+        ('socks4://example.com/', urlutils.InvalidProxyTypeError),
+    ])
+    def test_invalid(self, url, exception):
+        with pytest.raises(exception):
+            urlutils.proxy_from_url(QUrl(url))

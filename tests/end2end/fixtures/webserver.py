@@ -22,7 +22,6 @@
 import re
 import sys
 import json
-import socket
 import os.path
 import http.client
 
@@ -30,6 +29,8 @@ import pytest
 from PyQt5.QtCore import pyqtSignal, QUrl
 
 from end2end.fixtures import testprocess
+
+from qutebrowser.utils import utils
 
 
 class Request(testprocess.Line):
@@ -65,17 +66,34 @@ class Request(testprocess.Line):
         path_to_statuses = {
             '/favicon.ico': [http.client.NOT_FOUND],
             '/does-not-exist': [http.client.NOT_FOUND],
-            '/custom/redirect-later': [http.client.FOUND],
-            '/basic-auth/user/password':
-                [http.client.UNAUTHORIZED, http.client.OK],
-            '/redirect-to': [http.client.FOUND],
+            '/does-not-exist-2': [http.client.NOT_FOUND],
             '/status/404': [http.client.NOT_FOUND],
+
+            '/custom/redirect-later': [http.client.FOUND],
+            '/custom/redirect-self': [http.client.FOUND],
+            '/redirect-to': [http.client.FOUND],
+
             '/cookies/set': [http.client.FOUND],
         }
+        for i in range(15):
+            path_to_statuses['/redirect/{}'.format(i)] = [http.client.FOUND]
+            path_to_statuses['/relative-redirect/{}'.format(i)] = [
+                http.client.FOUND]
+            path_to_statuses['/absolute-redirect/{}'.format(i)] = [
+                http.client.FOUND]
+        for suffix in ['', '1', '2', '3', '4', '5', '6']:
+            key = '/basic-auth/user{}/password{}'.format(suffix, suffix)
+            path_to_statuses[key] = [http.client.UNAUTHORIZED, http.client.OK]
+
+        default_statuses = [http.client.OK, http.client.NOT_MODIFIED]
 
         sanitized = QUrl('http://localhost' + self.path).path()  # Remove ?foo
-        expected_statuses = path_to_statuses.get(sanitized, [http.client.OK])
-        assert self.status in expected_statuses
+        expected_statuses = path_to_statuses.get(sanitized, default_statuses)
+        if self.status not in expected_statuses:
+            raise AssertionError(
+                "{} loaded with status {} but expected {}".format(
+                    sanitized, self.status,
+                    ' / '.join(repr(e) for e in expected_statuses)))
 
     def __eq__(self, other):
         return NotImplemented
@@ -127,16 +145,8 @@ class WebserverProcess(testprocess.Process):
     def __init__(self, script, parent=None):
         super().__init__(parent)
         self._script = script
-        self.port = self._get_port()
+        self.port = utils.random_port()
         self.new_data.connect(self.new_request)
-
-    def _get_port(self):
-        """Get a random free port to use for the server."""
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind(('localhost', 0))
-        port = sock.getsockname()[1]
-        sock.close()
-        return port
 
     def get_requests(self):
         """Get the requests to the server during this test."""
@@ -173,7 +183,7 @@ class WebserverProcess(testprocess.Process):
         self.proc.waitForFinished()
 
 
-@pytest.yield_fixture(scope='session', autouse=True)
+@pytest.fixture(scope='session', autouse=True)
 def httpbin(qapp):
     """Fixture for an httpbin object which ensures clean setup/teardown."""
     httpbin = WebserverProcess('webserver_sub')
@@ -182,7 +192,7 @@ def httpbin(qapp):
     httpbin.cleanup()
 
 
-@pytest.yield_fixture(autouse=True)
+@pytest.fixture(autouse=True)
 def httpbin_after_test(httpbin, request):
     """Fixture to clean httpbin request list after each test."""
     request.node._httpbin_log = httpbin.captured_log
@@ -190,7 +200,7 @@ def httpbin_after_test(httpbin, request):
     httpbin.after_test()
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def ssl_server(request, qapp):
     """Fixture for a webserver with a self-signed SSL certificate.
 

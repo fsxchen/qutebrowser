@@ -129,17 +129,14 @@ def get_args(namespace):
         The argv list to be passed to Qt.
     """
     argv = [sys.argv[0]]
-    for argname, val in vars(namespace).items():
-        if not argname.startswith('qt_'):
-            continue
-        elif val is None:
-            # flag/argument not given
-            continue
-        elif val is True:
-            argv.append('-' + argname[3:])
-        else:
-            argv.append('-' + argname[3:])
-            argv.append(val)
+
+    if namespace.qt_flag is not None:
+        argv += ['-' + flag[0] for flag in namespace.qt_flag]
+
+    if namespace.qt_arg is not None:
+        for name, value in namespace.qt_arg:
+            argv += ['-' + name, value]
+
     return argv
 
 
@@ -209,20 +206,19 @@ def savefile_open(filename, binary=False, encoding='utf-8'):
     f = QSaveFile(filename)
     cancelled = False
     try:
-        ok = f.open(QIODevice.WriteOnly)
-        if not ok:
+        open_ok = f.open(QIODevice.WriteOnly)
+        if not open_ok:
             raise QtOSError(f)
         if binary:
             new_f = PyQIODevice(f)
         else:
             new_f = io.TextIOWrapper(PyQIODevice(f), encoding=encoding)
         yield new_f
+        new_f.flush()
     except:
         f.cancelWriting()
         cancelled = True
         raise
-    else:
-        new_f.flush()
     finally:
         commit_ok = f.commit()
         if not commit_ok and not cancelled:

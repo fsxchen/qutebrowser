@@ -61,11 +61,48 @@ Feature: Opening external editors
     Scenario: Spawning an editor successfully
         When I set up a fake editor returning "foobar"
         And I open data/editor.html
-        And I run :hint all
-        And I run :follow-hint a
+        And I run :click-element id qute-textarea
         And I wait for "Clicked editable element!" in the log
         And I run :open-editor
         And I wait for "Read back: foobar" in the log
-        And I run :hint all
-        And I run :follow-hint s
+        And I run :click-element id qute-button
         Then the javascript message "text: foobar" should be logged
+
+    Scenario: Spawning an editor in normal mode
+        When I set up a fake editor returning "foobar"
+        And I open data/editor.html
+        And I run :click-element id qute-textarea
+        And I wait for "Clicked editable element!" in the log
+        And I run :leave-mode
+        And I wait for "Leaving mode KeyMode.insert (reason: leave current)" in the log
+        And I run :open-editor
+        And I wait for "Read back: foobar" in the log
+        And I run :click-element id qute-button
+        Then the javascript message "text: foobar" should be logged
+
+    Scenario: Spawning an editor in caret mode
+        When I set up a fake editor returning "foobar"
+        And I open data/editor.html
+        And I run :click-element id qute-textarea
+        And I wait for "Clicked editable element!" in the log
+        And I run :leave-mode
+        And I wait for "Leaving mode KeyMode.insert (reason: leave current)" in the log
+        And I run :enter-mode caret
+        And I wait for "Entering mode KeyMode.caret (reason: command)" in the log
+        And I run :open-editor
+        And I wait for "Read back: foobar" in the log
+        And I run :click-element id qute-button
+        Then the javascript message "text: foobar" should be logged
+
+    @issue2183
+    Scenario: Spawning an editor with existing text
+        When I set up a fake editor replacing "foo" by "bar"
+        And I open data/editor.html
+        And I run :click-element id qute-textarea
+        And I wait for "Clicked editable element!" in the log
+        And I run :insert-text foo
+        And I wait for "Inserting text into element *" in the log
+        And I run :open-editor
+        And I wait for "Read back: bar" in the log
+        And I run :click-element id qute-button
+        Then the javascript message "text: bar" should be logged

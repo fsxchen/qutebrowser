@@ -19,6 +19,7 @@
 
 """Utils for writing an MHTML file."""
 
+import html
 import functools
 import io
 import os
@@ -31,19 +32,13 @@ import email.generator
 import email.encoders
 import email.mime.multipart
 import email.message
+import quopri
 
 from PyQt5.QtCore import QUrl
 
-from qutebrowser.browser.webkit import webelem, downloads
+from qutebrowser.browser import downloads
+from qutebrowser.browser.webkit import webkitelem
 from qutebrowser.utils import log, objreg, message, usertypes, utils, urlutils
-
-try:
-    import cssutils
-except (ImportError, re.error):
-    # Catching re.error because cssutils in earlier releases (<= 1.0) is broken
-    # on Python 3.5
-    # See https://bitbucket.org/cthedot/cssutils/issues/52
-    cssutils = None
 
 _File = collections.namedtuple('_File',
                                ['content', 'content_type', 'content_location',
@@ -85,6 +80,14 @@ def _get_css_imports_cssutils(data, inline=False):
         data: The content of the stylesheet to scan as string.
         inline: True if the argument is an inline HTML style attribute.
     """
+    try:
+        import cssutils
+    except (ImportError, re.error):
+        # Catching re.error because cssutils in earlier releases (<= 1.0) is
+        # broken on Python 3.5
+        # See https://bitbucket.org/cthedot/cssutils/issues/52
+        return None
+
     # We don't care about invalid CSS data, this will only litter the log
     # output with CSS errors
     parser = cssutils.CSSParser(loglevel=100,
@@ -114,10 +117,10 @@ def _get_css_imports(data, inline=False):
         data: The content of the stylesheet to scan as string.
         inline: True if the argument is an inline HTML style attribute.
     """
-    if cssutils is None:
-        return _get_css_imports_regex(data)
-    else:
-        return _get_css_imports_cssutils(data, inline)
+    imports = _get_css_imports_cssutils(data, inline)
+    if imports is None:
+        imports = _get_css_imports_regex(data)
+    return imports
 
 
 def _check_rel(element):
@@ -136,6 +139,22 @@ def _check_rel(element):
     return any(rel in rels for rel in must_have)
 
 
+def _encode_quopri_mhtml(msg):
+    """Encode the message's payload in quoted-printable.
+
+    Substitute for quopri's default 'encode_quopri' method, which needlessly
+    encodes all spaces and tabs, instead of only those at the end on the
+    line.
+
+    Args:
+        msg: Email message to quote.
+    """
+    orig = msg.get_payload(decode=True)
+    encdata = quopri.encodestring(orig, quotetabs=False)
+    msg.set_payload(encdata)
+    msg['Content-Transfer-Encoding'] = 'quoted-printable'
+
+
 MHTMLPolicy = email.policy.default.clone(linesep='\r\n', max_line_length=0)
 
 
@@ -144,7 +163,7 @@ E_BASE64 = email.encoders.encode_base64
 
 
 # Encode the file using MIME quoted-printable encoding.
-E_QUOPRI = email.encoders.encode_quopri
+E_QUOPRI = _encode_quopri_mhtml
 
 
 class MHTMLWriter:
@@ -271,7 +290,7 @@ class _Downloader:
         elements = web_frame.findAllElements('link, script, img')
 
         for element in elements:
-            element = webelem.WebElementWrapper(element)
+            element = webkitelem.WebKitElement(element, tab=self.tab)
             # Websites are free to set whatever rel=... attribute they want.
             # We just care about stylesheets and icons.
             if not _check_rel(element):
@@ -288,7 +307,7 @@ class _Downloader:
 
         styles = web_frame.findAllElements('style')
         for style in styles:
-            style = webelem.WebElementWrapper(style)
+            style = webkitelem.WebKitElement(style, tab=self.tab)
             # The Mozilla Developer Network says:
             # type: This attribute defines the styling language as a MIME type
             # (charset should not be specified). This attribute is optional and
@@ -301,7 +320,7 @@ class _Downloader:
 
         # Search for references in inline styles
         for element in web_frame.findAllElements('[style]'):
-            element = webelem.WebElementWrapper(element)
+            element = webkitelem.WebKitElement(element, tab=self.tab)
             style = element['style']
             for element_url in _get_css_imports(style, inline=True):
                 self._fetch_url(web_url.resolved(QUrl(element_url)))
@@ -341,9 +360,9 @@ class _Downloader:
             self.writer.add_file(urlutils.encoded_url(url), b'')
             return
 
-        download_manager = objreg.get('download-manager', scope='window',
-                                      window=self._win_id)
-        target = usertypes.FileObjDownloadTarget(_NoCloseBytesIO())
+        download_manager = objreg.get('qtnetwork-download-manager',
+                                      scope='window', window=self._win_id)
+        target = downloads.FileObjDownloadTarget(_NoCloseBytesIO())
         item = download_manager.get(url, target=target,
                                     auto_remove=True)
         self.pending_downloads.add((url, item))
@@ -447,11 +466,10 @@ class _Downloader:
             with open(self.dest, 'wb') as file_output:
                 self.writer.write_to(file_output)
         except OSError as error:
-            message.error(self._win_id,
-                          "Could not save file: {}".format(error))
+            message.error("Could not save file: {}".format(error))
             return
         log.downloads.debug("File successfully written.")
-        message.info(self._win_id, "Page saved as {}".format(self.dest))
+        message.info("Page saved as {}".format(self.dest))
 
     def _collect_zombies(self):
         """Collect done downloads and add their data to the MHTML file.
@@ -528,8 +546,7 @@ def start_download_checked(dest, tab):
     # saving the file anyway.
     if not os.path.isdir(os.path.dirname(path)):
         folder = os.path.dirname(path)
-        message.error(tab.win_id,
-                      "Directory {} does not exist.".format(folder))
+        message.error("Directory {} does not exist.".format(folder))
         return
 
     if not os.path.isfile(path):
@@ -538,10 +555,10 @@ def start_download_checked(dest, tab):
 
     q = usertypes.Question()
     q.mode = usertypes.PromptMode.yesno
-    q.text = "{} exists. Overwrite?".format(path)
+    q.title = "Overwrite existing file?"
+    q.text = "<b>{}</b> already exists. Overwrite?".format(
+        html.escape(path))
     q.completed.connect(q.deleteLater)
     q.answered_yes.connect(functools.partial(
         _start_download, path, tab=tab))
-    message_bridge = objreg.get('message-bridge', scope='window',
-                                window=tab.win_id)
-    message_bridge.ask(q, blocking=False)
+    message.global_bridge.ask(q, blocking=False)

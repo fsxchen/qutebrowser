@@ -36,6 +36,9 @@ def gen_classes():
             pass
         elif member is configtypes.MappingType:
             pass
+        elif member is configtypes.List:
+            yield functools.partial(member, inner_type=configtypes.Int())
+            yield functools.partial(member, inner_type=configtypes.Url())
         elif member is configtypes.FormatString:
             yield functools.partial(member, fields=['a', 'b'])
         elif issubclass(member, configtypes.BaseType):
@@ -47,8 +50,7 @@ def gen_classes():
 @hypothesis.given(strategies.text())
 @hypothesis.example('\x00')
 def test_configtypes_hypothesis(klass, s):
-    if (klass in [configtypes.File, configtypes.UserStyleSheet] and
-            sys.platform == 'linux' and
+    if (klass == configtypes.File and sys.platform == 'linux' and
             not os.environ.get('DISPLAY', '')):
         pytest.skip("No DISPLAY available")
 

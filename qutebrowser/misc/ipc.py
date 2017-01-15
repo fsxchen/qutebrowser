@@ -299,7 +299,7 @@ class IPCServer(QObject):
         try:
             decoded = data.decode('utf-8')
         except UnicodeDecodeError:
-            log.ipc.error("invalid utf-8: {}".format(binascii.hexlify(data)))
+            log.ipc.error("invalid utf-8: {!r}".format(binascii.hexlify(data)))
             self._handle_invalid_data()
             return
 
@@ -354,7 +354,7 @@ class IPCServer(QObject):
         while self._socket is not None and self._socket.canReadLine():
             data = bytes(self._socket.readLine())
             self.got_raw.emit(data)
-            log.ipc.debug("Read from socket 0x{:x}: {}".format(
+            log.ipc.debug("Read from socket 0x{:x}: {!r}".format(
                 id(self._socket), data))
             self._handle_data(data)
         self._timer.start()
@@ -362,6 +362,9 @@ class IPCServer(QObject):
     @pyqtSlot()
     def on_timeout(self):
         """Cancel the current connection if it was idle for too long."""
+        if self._socket is None:  # pragma: no cover
+            log.ipc.error("on_timeout got called with None socket!")
+            return
         log.ipc.error("IPC connection timed out "
                       "(socket 0x{:x}).".format(id(self._socket)))
         self._socket.disconnectFromServer()
@@ -482,7 +485,7 @@ def send_to_running_instance(socketname, command, target_arg, *,
             json_data['cwd'] = cwd
         line = json.dumps(json_data) + '\n'
         data = line.encode('utf-8')
-        log.ipc.debug("Writing: {}".format(data))
+        log.ipc.debug("Writing: {!r}".format(data))
         socket.writeData(data)
         socket.waitForBytesWritten(WRITE_TIMEOUT)
         if socket.error() != QLocalSocket.UnknownSocketError:

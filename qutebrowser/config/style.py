@@ -60,11 +60,12 @@ def set_register_stylesheet(obj):
         obj.__class__.__name__, qss))
     obj.setStyleSheet(qss)
     objreg.get('config').changed.connect(
-        functools.partial(update_stylesheet, obj))
+        functools.partial(_update_stylesheet, obj))
 
 
-def update_stylesheet(obj):
+def _update_stylesheet(obj):
     """Update the stylesheet for obj."""
+    get_stylesheet.cache_clear()
     if not sip.isdeleted(obj):
         obj.setStyleSheet(get_stylesheet(obj.STYLESHEET))
 

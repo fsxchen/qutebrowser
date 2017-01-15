@@ -89,11 +89,9 @@ class KeyConfigParser(QObject):
         self._cur_command = None
         # Mapping of section name(s) to key binding -> command dicts.
         self.keybindings = collections.OrderedDict()
-        if configdir is None:
-            self._configfile = None
-        else:
-            self._configfile = os.path.join(configdir, fname)
-        if self._configfile is None or not os.path.exists(self._configfile):
+        self._configfile = os.path.join(configdir, fname)
+
+        if not os.path.exists(self._configfile):
             self._load_default()
         else:
             self._read(relaxed)
@@ -143,18 +141,15 @@ class KeyConfigParser(QObject):
 
     def save(self):
         """Save the key config file."""
-        if self._configfile is None:
-            return
         log.destroy.debug("Saving key config to {}".format(self._configfile))
         with qtutils.savefile_open(self._configfile, encoding='utf-8') as f:
             data = str(self)
             f.write(data)
 
-    @cmdutils.register(instance='key-config', maxsplit=1, no_cmd_split=True)
-    @cmdutils.argument('win_id', win_id=True)
-    @cmdutils.argument('key', completion=usertypes.Completion.empty)
-    @cmdutils.argument('command', completion=usertypes.Completion.command)
-    def bind(self, key, win_id, command=None, *, mode='normal', force=False):
+    @cmdutils.register(instance='key-config', maxsplit=1, no_cmd_split=True,
+                       no_replace_variables=True)
+    @cmdutils.argument('command', completion=usertypes.Completion.bind)
+    def bind(self, key, command=None, *, mode='normal', force=False):
         """Bind a key to a command.
 
         Args:
@@ -172,19 +167,19 @@ class KeyConfigParser(QObject):
         if command is None:
             cmd = self.get_bindings_for(mode).get(key, None)
             if cmd is None:
-                message.info(win_id, "{} is unbound in {} mode".format(
-                    key, mode))
+                message.info("{} is unbound in {} mode".format(key, mode))
             else:
-                message.info(win_id, "{} is bound to '{}' in {} mode".format(
-                    key, cmd, mode))
+                message.info("{} is bound to '{}' in {} mode".format(key, cmd,
+                                                                     mode))
             return
 
-        mode = self._normalize_sectname(mode)
-        for m in mode.split(','):
+        modenames = self._normalize_sectname(mode).split(',')
+        for m in modenames:
             if m not in configdata.KEY_DATA:
                 raise cmdexc.CommandError("Invalid mode {}!".format(m))
         try:
-            self._validate_command(command)
+            modes = [usertypes.KeyMode[m] for m in modenames]
+            self._validate_command(command, modes)
         except KeyConfigError as e:
             raise cmdexc.CommandError(str(e))
         try:
@@ -194,7 +189,7 @@ class KeyConfigParser(QObject):
                                       "override!".format(str(e.keychain)))
         except KeyConfigError as e:
             raise cmdexc.CommandError(e)
-        for m in mode.split(','):
+        for m in modenames:
             self.changed.emit(m)
             self._mark_config_dirty()
 
@@ -285,6 +280,9 @@ class KeyConfigParser(QObject):
         A binding is considered new if both the command is not bound to any key
         yet, and the key isn't used anywhere else in the same section.
         """
+        if utils.is_special_key(keychain):
+            keychain = keychain.lower()
+
         try:
             bindings = self.keybindings[sectname]
         except KeyError:
@@ -333,8 +331,13 @@ class KeyConfigParser(QObject):
         self.is_dirty = True
         self.config_dirty.emit()
 
-    def _validate_command(self, line):
-        """Check if a given command is valid."""
+    def _validate_command(self, line, modes=None):
+        """Check if a given command is valid.
+
+        Args:
+            line: The commandline to validate.
+            modes: A list of modes to validate the commands for, or None.
+        """
         from qutebrowser.config import config
         if line == self.UNBOUND_COMMAND:
             return
@@ -354,8 +357,15 @@ class KeyConfigParser(QObject):
         commands = [c.split(maxsplit=1)[0].strip() for c in commands]
         for cmd in commands:
             aliases = config.section('aliases')
-            if cmd not in cmdutils.cmd_dict and cmd not in aliases:
+            if cmd in cmdutils.cmd_dict:
+                cmdname = cmd
+            elif cmd in aliases:
+                cmdname = aliases[cmd].split(maxsplit=1)[0].strip()
+            else:
                 raise KeyConfigError("Invalid command '{}'!".format(cmd))
+            cmd_obj = cmdutils.cmd_dict[cmdname]
+            for m in modes or []:
+                cmd_obj.validate_mode(m)
 
     def _read_command(self, line):
         """Read a command from a line."""
@@ -424,8 +434,9 @@ class KeyConfigParser(QObject):
 
     def get_reverse_bindings_for(self, section):
         """Get a dict of commands to a list of bindings for the section."""
-        cmd_to_keys = collections.defaultdict(list)
+        cmd_to_keys = {}
         for key, cmd in self.get_bindings_for(section).items():
+            cmd_to_keys.setdefault(cmd, [])
             # put special bindings last
             if utils.is_special_key(key):
                 cmd_to_keys[cmd].append(key)

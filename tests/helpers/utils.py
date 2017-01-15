@@ -26,6 +26,8 @@ import re
 import pprint
 import os.path
 
+import pytest
+
 
 class PartialCompareOutcome:
 
@@ -84,7 +86,7 @@ def _partial_compare_list(val1, val2, *, indent):
 
 
 def _partial_compare_float(val1, val2, *, indent):
-    if abs(val1 - val2) < 0.00001:
+    if val1 == pytest.approx(val2):
         return PartialCompareOutcome()
 
     return PartialCompareOutcome("{!r} != {!r} (float comparison)".format(
@@ -155,7 +157,7 @@ def pattern_match(*, pattern, value):
         True on a match, False otherwise.
     """
     re_pattern = '.*'.join(re.escape(part) for part in pattern.split('*'))
-    return re.fullmatch(re_pattern, value) is not None
+    return re.fullmatch(re_pattern, value, flags=re.DOTALL) is not None
 
 
 def abs_datapath():

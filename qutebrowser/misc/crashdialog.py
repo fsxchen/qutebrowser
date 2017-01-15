@@ -91,7 +91,9 @@ def get_fatal_crash_dialog(debug, data):
                 "those crashes I disabled the crash reporter for this case, "
                 "but this will likely be resolved in the future with the new "
                 "QtWebEngine backend.")
-        return QMessageBox(QMessageBox.Critical, title, text, QMessageBox.Ok)
+        box = QMessageBox(QMessageBox.Critical, title, text, QMessageBox.Ok)
+        box.setAttribute(Qt.WA_DeleteOnClose)
+        return box
     else:
         return FatalCrashDialog(debug, data)
 
@@ -99,7 +101,7 @@ def get_fatal_crash_dialog(debug, data):
 def _get_environment_vars():
     """Gather environment variables for the crash info."""
     masks = ('DESKTOP_SESSION', 'DE', 'QT_*', 'PYTHON*', 'LC_*', 'LANG',
-             'XDG_*')
+             'XDG_*', 'QUTE_*', 'PATH')
     info = []
     for key, value in os.environ.items():
         for m in masks:
@@ -379,7 +381,7 @@ class _CrashDialog(QDialog):
         lines = ['The report has been sent successfully. Thanks!']
         lines.append("There was an error while getting the newest version: "
                      "{}. Please check for a new version on "
-                     "<a href=http://www.qutebrowser.org/>qutebrowser.org</a> "
+                     "<a href=https://www.qutebrowser.org/>qutebrowser.org</a> "
                      "by yourself.".format(msg))
         text = '<br/><br/>'.join(lines)
         self.finish()

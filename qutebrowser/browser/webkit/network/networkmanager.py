@@ -22,17 +22,19 @@
 import os
 import collections
 import netrc
+import html
 
 from PyQt5.QtCore import (pyqtSlot, pyqtSignal, PYQT_VERSION, QCoreApplication,
                           QUrl, QByteArray)
-from PyQt5.QtNetwork import (QNetworkAccessManager, QNetworkReply, QSslError,
-                             QSslSocket)
+from PyQt5.QtNetwork import QNetworkAccessManager, QNetworkReply, QSslSocket
 
 from qutebrowser.config import config
 from qutebrowser.utils import (message, log, usertypes, utils, objreg, qtutils,
-                               urlutils, debug)
-from qutebrowser.browser.webkit.network import qutescheme, networkreply
-from qutebrowser.browser.webkit.network import filescheme
+                               urlutils)
+from qutebrowser.browser import shared
+from qutebrowser.browser.webkit import certificateerror
+from qutebrowser.browser.webkit.network import (webkitqutescheme, networkreply,
+                                                filescheme)
 
 
 HOSTBLOCK_ERROR_STRING = '%HOSTBLOCK%'
@@ -109,24 +111,6 @@ def init():
     QSslSocket.setDefaultCiphers(good_ciphers)
 
 
-class SslError(QSslError):
-
-    """A QSslError subclass which provides __hash__ on Qt < 5.4."""
-
-    def __hash__(self):
-        try:
-            # Qt >= 5.4
-            # pylint: disable=not-callable,useless-suppression
-            return super().__hash__()
-        except TypeError:
-            return hash((self.certificate().toDer(), self.error()))
-
-    def __repr__(self):
-        return utils.get_repr(
-            self, error=debug.qenum_key(QSslError, self.error()),
-            string=self.errorString())
-
-
 class NetworkManager(QNetworkAccessManager):
 
     """Our own QNetworkAccessManager.
@@ -163,7 +147,7 @@ class NetworkManager(QNetworkAccessManager):
         self._tab_id = tab_id
         self._requests = []
         self._scheme_handlers = {
-            'qute': qutescheme.QuteSchemeHandler(win_id),
+            'qute': webkitqutescheme.QuteSchemeHandler(win_id),
             'file': filescheme.FileSchemeHandler(win_id),
         }
         self._set_cookiejar(private=config.get('general', 'private-browsing'))
@@ -206,36 +190,18 @@ class NetworkManager(QNetworkAccessManager):
         self.setCache(cache)
         cache.setParent(app)
 
-    def _ask(self, text, mode, owner=None):
-        """Ask a blocking question in the statusbar.
-
-        Args:
-            text: The text to display to the user.
-            mode: A PromptMode.
-            owner: An object which will abort the question if destroyed, or
-                   None.
-
-        Return:
-            The answer the user gave or None if the prompt was cancelled.
-        """
-        q = usertypes.Question()
-        q.text = text
-        q.mode = mode
-        self.shutting_down.connect(q.abort)
+    def _get_abort_signals(self, owner=None):
+        """Get a list of signals which should abort a question."""
+        abort_on = [self.shutting_down]
         if owner is not None:
-            owner.destroyed.connect(q.abort)
-
+            abort_on.append(owner.destroyed)
         # This might be a generic network manager, e.g. one belonging to a
         # DownloadManager. In this case, just skip the webview thing.
         if self._tab_id is not None:
             tab = objreg.get('tab', scope='tab', window=self._win_id,
                              tab=self._tab_id)
-            tab.load_started.connect(q.abort)
-        bridge = objreg.get('message-bridge', scope='window',
-                            window=self._win_id)
-        bridge.ask(q, blocking=True)
-        q.deleteLater()
-        return q.answer
+            abort_on.append(tab.load_started)
+        return abort_on
 
     def shutdown(self):
         """Abort all running requests."""
@@ -255,11 +221,9 @@ class NetworkManager(QNetworkAccessManager):
             reply: The QNetworkReply that is encountering the errors.
             errors: A list of errors.
         """
-        errors = [SslError(e) for e in errors]
-        ssl_strict = config.get('network', 'ssl-strict')
-        log.webview.debug("SSL errors {!r}, strict {}".format(
-            errors, ssl_strict))
-
+        errors = [certificateerror.CertificateErrorWrapper(e) for e in errors]
+        log.webview.debug("Certificate errors: {!r}".format(
+            ' / '.join(str(err) for err in errors)))
         try:
             host_tpl = urlutils.host_tuple(reply.url())
         except ValueError:
@@ -275,33 +239,22 @@ class NetworkManager(QNetworkAccessManager):
         log.webview.debug("Already accepted: {} / "
                           "rejected {}".format(is_accepted, is_rejected))
 
-        if (ssl_strict and ssl_strict != 'ask') or is_rejected:
+        if is_rejected:
             return
         elif is_accepted:
             reply.ignoreSslErrors()
             return
 
-        if ssl_strict == 'ask':
-            err_string = '\n'.join('- ' + err.errorString() for err in errors)
-            answer = self._ask('SSL errors - continue?\n{}'.format(err_string),
-                               mode=usertypes.PromptMode.yesno, owner=reply)
-            log.webview.debug("Asked for SSL errors, answer {}".format(answer))
-            if answer:
-                reply.ignoreSslErrors()
-                err_dict = self._accepted_ssl_errors
-            else:
-                err_dict = self._rejected_ssl_errors
-            if host_tpl is not None:
-                err_dict[host_tpl] += errors
-        else:
-            log.webview.debug("ssl-strict is False, only warning about errors")
-            for err in errors:
-                # FIXME we might want to use warn here (non-fatal error)
-                # https://github.com/The-Compiler/qutebrowser/issues/114
-                message.error(self._win_id, 'SSL error: {}'.format(
-                    err.errorString()))
+        abort_on = self._get_abort_signals(reply)
+        ignore = shared.ignore_certificate_errors(reply.url(), errors,
+                                                  abort_on=abort_on)
+        if ignore:
             reply.ignoreSslErrors()
-            self._accepted_ssl_errors[host_tpl] += errors
+            err_dict = self._accepted_ssl_errors
+        else:
+            err_dict = self._rejected_ssl_errors
+        if host_tpl is not None:
+            err_dict[host_tpl] += errors
 
     def clear_all_ssl_errors(self):
         """Clear all remembered SSL errors."""
@@ -330,7 +283,7 @@ class NetworkManager(QNetworkAccessManager):
             # altogether.
             reply.netrc_used = True
             try:
-                net = netrc.netrc()
+                net = netrc.netrc(config.get('network', 'netrc-file'))
                 authenticators = net.authenticators(reply.url().host())
                 if authenticators is not None:
                     (user, _account, password) = authenticators
@@ -341,16 +294,13 @@ class NetworkManager(QNetworkAccessManager):
             except netrc.NetrcParseError:
                 log.misc.exception("Error when parsing the netrc file")
 
-        if user is None:
-            # netrc check failed
-            answer = self._ask("Username ({}):".format(authenticator.realm()),
-                               mode=usertypes.PromptMode.user_pwd,
-                               owner=reply)
-            if answer is not None:
-                user, password = answer.user, answer.password
         if user is not None:
             authenticator.setUser(user)
             authenticator.setPassword(password)
+        else:
+            abort_on = self._get_abort_signals(reply)
+            shared.authentication_required(reply.url(), authenticator,
+                                           abort_on=abort_on)
 
     @pyqtSlot('QNetworkProxy', 'QAuthenticator*')
     def on_proxy_authentication_required(self, proxy, authenticator):
@@ -361,9 +311,13 @@ class NetworkManager(QNetworkAccessManager):
             authenticator.setUser(user)
             authenticator.setPassword(password)
         else:
-            answer = self._ask(
-                "Proxy username ({}):".format(authenticator.realm()),
-                mode=usertypes.PromptMode.user_pwd)
+            msg = '<b>{}</b> says:<br/>{}'.format(
+                html.escape(proxy.hostName()),
+                html.escape(authenticator.realm()))
+            abort_on = self._get_abort_signals()
+            answer = message.ask(
+                title="Proxy authentication required", text=msg,
+                mode=usertypes.PromptMode.user_pwd, abort_on=abort_on)
             if answer is not None:
                 authenticator.setUser(answer.user)
                 authenticator.setPassword(answer.password)
@@ -400,7 +354,7 @@ class NetworkManager(QNetworkAccessManager):
         log.downloads.debug("Adopted download, {} adopted.".format(
             self.adopted_downloads))
         download.destroyed.connect(self.on_adopted_download_destroyed)
-        download.do_retry.connect(self.adopt_download)
+        download.adopt_download.connect(self.adopt_download)
 
     def set_referer(self, req, current_url):
         """Set the referer header."""
@@ -442,12 +396,23 @@ class NetworkManager(QNetworkAccessManager):
         Return:
             A QNetworkReply.
         """
+        proxy_factory = objreg.get('proxy-factory', None)
+        if proxy_factory is not None:
+            proxy_error = proxy_factory.get_error()
+            if proxy_error is not None:
+                return networkreply.ErrorNetworkReply(
+                    req, proxy_error, QNetworkReply.UnknownProxyError,
+                    self)
+
         scheme = req.url().scheme()
         if scheme in self._scheme_handlers:
             result = self._scheme_handlers[scheme].createRequest(
                 op, req, outgoing_data)
             if result is not None:
                 return result
+
+        for header, value in shared.custom_headers():
+            req.setRawHeader(header, value)
 
         host_blocker = objreg.get('host-blocker')
         if (op == QNetworkAccessManager.GetOperation and
@@ -457,20 +422,6 @@ class NetworkManager(QNetworkAccessManager):
             return networkreply.ErrorNetworkReply(
                 req, HOSTBLOCK_ERROR_STRING, QNetworkReply.ContentAccessDenied,
                 self)
-
-        if config.get('network', 'do-not-track'):
-            dnt = '1'.encode('ascii')
-        else:
-            dnt = '0'.encode('ascii')
-        req.setRawHeader('DNT'.encode('ascii'), dnt)
-        req.setRawHeader('X-Do-Not-Track'.encode('ascii'), dnt)
-
-        # Load custom headers
-        custom_headers = config.get('network', 'custom-headers')
-
-        if custom_headers is not None:
-            for header, value in custom_headers.items():
-                req.setRawHeader(header.encode('ascii'), value.encode('ascii'))
 
         # There are some scenarios where we can't figure out current_url:
         # - There's a generic NetworkManager, e.g. for downloads
@@ -490,10 +441,6 @@ class NetworkManager(QNetworkAccessManager):
 
         self.set_referer(req, current_url)
 
-        accept_language = config.get('network', 'accept-language')
-        if accept_language is not None:
-            req.setRawHeader('Accept-Language'.encode('ascii'),
-                             accept_language.encode('ascii'))
         if PYQT_VERSION < 0x050301:
             # WORKAROUND (remove this when we bump the requirements to 5.3.1)
             #

@@ -6,6 +6,8 @@ exclude = .*,__pycache__,resources.py
 # E501: Line too long
 # E402: module level import not at top of file
 # E266: too many leading '#' for block comment
+# E731: do not assign a lambda expression, use a def
+#       (for pytest's __tracebackhide__)
 # F401: Unused import
 # N802: function name should be lowercase
 # P101: format string does contain unindexed parameters
@@ -21,18 +23,12 @@ exclude = .*,__pycache__,resources.py
 # D402: First line should not be function's signature (false-positives)
 # D403: First word of the first line should be properly capitalized
 #       (false-positives)
-# H101: Use TODO(NAME)
-# H201: bare except
-# H238: Use new-stule classes
-# H301: one import per line
-# H306: imports not in alphabetical order
 ignore =
-    E128,E226,E265,E501,E402,E266,
+    E128,E226,E265,E501,E402,E266,E731,
     F401,
     N802,
     P101,P102,P103,
-    D102,D103,D104,D105,D209,D211,D402,D403,
-    H101,H201,H238,H301,H306
+    D102,D103,D104,D105,D209,D211,D402,D403
 min-version = 3.4.0
 max-complexity = 12
 putty-auto-ignore = True
@@ -41,6 +37,8 @@ putty-ignore =
     /# pylint: disable=wildcard-import/ : +F403
     /# pragma: no mccabe/ : +C901
     tests/*/test_*.py : +D100,D101,D401
+    tests/unit/browser/webkit/test_history.py : +N806
+    tests/helpers/fixtures.py : +N806
     tests/unit/browser/webkit/http/test_content_disposition.py : +D400
     scripts/dev/ci/appveyor_install.py : +FI53
 copyright-check = True

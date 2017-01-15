@@ -71,7 +71,8 @@ Feature: Zooming in and out
 
     Scenario: Setting zoom with argument and count
         When I run :zoom 50 with count 60
-        Then the error "Both count and argument given!" should be shown
+        Then the message "Zoom level: 60%" should be shown
+        And the zoom should be 60%
 
     # Fixed in QtWebEngine branch
     @xfail
@@ -84,3 +85,11 @@ Feature: Zooming in and out
         And I run :zoom-in
         Then the message "Zoom level: 120%" should be shown
         And the zoom should be 120%
+
+    # https://github.com/The-Compiler/qutebrowser/issues/2183
+    @qtwebengine_flaky
+    Scenario: Setting a default zoom
+        When I set ui -> default-zoom to 200%
+        And I open data/hello.txt in a new tab
+        And I run :tab-only
+        Then the zoom should be 200%

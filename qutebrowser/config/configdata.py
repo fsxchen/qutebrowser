@@ -35,6 +35,7 @@ from qutebrowser.config import configtypes as typ
 from qutebrowser.config import sections as sect
 from qutebrowser.config.value import SettingValue
 from qutebrowser.utils.qtutils import MAXVALS
+from qutebrowser.utils import usertypes
 
 
 FIRST_COMMENT = r"""
@@ -89,7 +90,7 @@ SECTION_DESC = {
         "Aliases for commands.\n"
         "By default, no aliases are defined. Example which adds a new command "
         "`:qtb` to open qutebrowsers website:\n\n"
-        "`qtb = open http://www.qutebrowser.org/`"),
+        "`qtb = open https://www.qutebrowser.org/`"),
     'colors': (
         "Colors used in the UI.\n"
         "A value can be in one of the following format:\n\n"
@@ -135,8 +136,23 @@ def data(readonly=False):
              "Whether to find text on a page case-insensitively."),
 
             ('startpage',
-             SettingValue(typ.List(), 'https://duckduckgo.com'),
+             SettingValue(typ.List(typ.String()),
+                          'https://start.duckduckgo.com'),
              "The default page(s) to open at the start, separated by commas."),
+
+            ('yank-ignored-url-parameters',
+             SettingValue(typ.List(typ.String()),
+                          'ref,utm_source,utm_medium,utm_campaign,utm_term,'
+                          'utm_content'),
+            "The URL parameters to strip with :yank url, separated by "
+            "commas."),
+
+            ('default-open-dispatcher',
+             SettingValue(typ.String(none_ok=True), ''),
+            "The default program used to open downloads. Set to an empty "
+            "string to use the default internal handler.\n\n"
+            "Any {} in the string will be expanded to the filename, else "
+            "the filename will be appended."),
 
             ('default-page',
              SettingValue(typ.FuzzyUrl(), '${startpage}'),
@@ -153,7 +169,7 @@ def data(readonly=False):
              "Whether to save the config automatically on quit."),
 
             ('auto-save-interval',
-             SettingValue(typ.Int(minval=0), '15000'),
+             SettingValue(typ.Int(minval=0, maxval=MAXVALS['int']), '15000'),
              "How often (in milliseconds) to auto-save config/cookies/etc."),
 
             ('editor',
@@ -169,18 +185,22 @@ def data(readonly=False):
              "Encoding to use for editor."),
 
             ('private-browsing',
-             SettingValue(typ.Bool(), 'false'),
+             SettingValue(typ.Bool(), 'false',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Do not record visited pages in the history or store web page "
              "icons."),
 
             ('developer-extras',
-             SettingValue(typ.Bool(), 'false'),
+             SettingValue(typ.Bool(), 'false',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Enable extra tools for Web developers.\n\n"
              "This needs to be enabled for `:inspector` to work and also adds "
-             "an _Inspect_ entry to the context menu."),
+             "an _Inspect_ entry to the context menu. For QtWebEngine, see "
+             "'qutebrowser --help' instead."),
 
             ('print-element-backgrounds',
-             SettingValue(typ.Bool(), 'true'),
+             SettingValue(typ.Bool(), 'true',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Whether the background color and images are also drawn when the "
              "page is printed."),
 
@@ -193,7 +213,8 @@ def data(readonly=False):
              "have an impact on performance."),
 
             ('site-specific-quirks',
-             SettingValue(typ.Bool(), 'true'),
+             SettingValue(typ.Bool(), 'true',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Enable workarounds for broken sites."),
 
             ('default-encoding',
@@ -222,6 +243,20 @@ def data(readonly=False):
                  )), 'tab'),
              "How to open links in an existing instance if a new one is "
              "launched."),
+
+            ('new-instance-open-target.window',
+             SettingValue(typ.String(
+                 valid_values=typ.ValidValues(
+                     ('first-opened', "Open new tabs in the first (oldest) "
+                                      "opened window."),
+                     ('last-opened', "Open new tabs in the last (newest) "
+                                     "opened window."),
+                     ('last-focused', "Open new tabs in the most recently "
+                                      "focused window."),
+                     ('last-visible', "Open new tabs in the most recently "
+                                      "visible window.")
+                 )), 'last-focused'),
+             "Which window to choose when opening links as new tabs."),
 
             ('log-javascript-console',
              SettingValue(typ.String(
@@ -254,7 +289,7 @@ def data(readonly=False):
 
         ('ui', sect.KeyValue(
             ('zoom-levels',
-             SettingValue(typ.PercList(minval=0),
+             SettingValue(typ.List(typ.Perc(minval=0)),
                           '25%,33%,50%,67%,75%,90%,100%,110%,125%,150%,175%,'
                           '200%,250%,300%,400%,500%'),
              "The available zoom levels, separated by commas."),
@@ -284,25 +319,30 @@ def data(readonly=False):
              "Whether to confirm quitting the application."),
 
             ('zoom-text-only',
-             SettingValue(typ.Bool(), 'false'),
+             SettingValue(typ.Bool(), 'false',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Whether the zoom factor on a frame applies only to the text or "
              "to all content."),
 
             ('frame-flattening',
-             SettingValue(typ.Bool(), 'false'),
+             SettingValue(typ.Bool(), 'false',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Whether to  expand each subframe to its contents.\n\n"
              "This will flatten all the frames to become one scrollable "
              "page."),
 
             ('user-stylesheet',
-             SettingValue(typ.UserStyleSheet(none_ok=True),
-                          '::-webkit-scrollbar { width: 0px; height: 0px; }'),
-             "User stylesheet to use (absolute filename, filename relative to "
-             "the config directory or CSS string). Will expand environment "
-             "variables."),
+             SettingValue(typ.File(none_ok=True), ''),
+             "User stylesheet to use (absolute filename or filename relative "
+             "to the config directory). Will expand environment variables."),
+
+            ('hide-scrollbar',
+             SettingValue(typ.Bool(), 'true'),
+             "Hide the main scrollbar."),
 
             ('css-media-type',
-             SettingValue(typ.String(none_ok=True), ''),
+             SettingValue(typ.String(none_ok=True), '',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Set the CSS media type."),
 
             ('smooth-scrolling',
@@ -325,7 +365,8 @@ def data(readonly=False):
             ('window-title-format',
              SettingValue(typ.FormatString(fields=['perc', 'perc_raw', 'title',
                                                    'title_sep', 'id',
-                                                   'scroll_pos', 'host']),
+                                                   'scroll_pos', 'host',
+                                                   'backend']),
                           '{perc}{title}{title_sep}qutebrowser'),
              "The format to use for the window title. The following "
              "placeholders are defined:\n\n"
@@ -336,11 +377,8 @@ def data(readonly=False):
              "otherwise.\n"
              "* `{id}`: The internal window ID of this window.\n"
              "* `{scroll_pos}`: The page scroll position.\n"
-             "* `{host}`: The host of the current web page."),
-
-            ('hide-mouse-cursor',
-             SettingValue(typ.Bool(), 'false'),
-             "Whether to hide the mouse cursor."),
+             "* `{host}`: The host of the current web page.\n"
+             "* `{backend}`: Either 'webkit' or 'webengine'"),
 
             ('modal-js-dialog',
              SettingValue(typ.Bool(), 'false'),
@@ -352,10 +390,18 @@ def data(readonly=False):
              "(requires restart)"),
 
             ('keyhint-blacklist',
-             SettingValue(typ.List(none_ok=True), ''),
+             SettingValue(typ.List(typ.String(), none_ok=True), ''),
              "Keychains that shouldn't be shown in the keyhint dialog\n\n"
              "Globs are supported, so ';*' will blacklist all keychains"
              "starting with ';'. Use '*' to disable keyhints"),
+
+            ('prompt-radius',
+             SettingValue(typ.Int(minval=0), '8'),
+             "The rounding radius for the edges of prompts."),
+
+            ('prompt-filebrowser',
+             SettingValue(typ.Bool(), 'true'),
+             "Show a filebrowser in upload/download prompts."),
 
             readonly=readonly
         )),
@@ -378,7 +424,7 @@ def data(readonly=False):
                      ('same-domain', "Only send for the same domain."
                       " This will still protect your privacy, but"
                       " shouldn't break any sites.")
-                 )), 'same-domain'),
+                 )), 'same-domain', backends=[usertypes.Backend.QtWebKit]),
              "Send the Referer header"),
 
             ('user-agent',
@@ -386,13 +432,15 @@ def data(readonly=False):
              "User agent to send. Empty to send the default."),
 
             ('proxy',
-             SettingValue(typ.Proxy(), 'system'),
+             SettingValue(typ.Proxy(), 'system',
+                          backends=[usertypes.Backend.QtWebKit]),
              "The proxy to use.\n\n"
              "In addition to the listed values, you can use a `socks://...` "
              "or `http://...` URL."),
 
             ('proxy-dns-requests',
-             SettingValue(typ.Bool(), 'true'),
+             SettingValue(typ.Bool(), 'true',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Whether to send DNS requests over the configured proxy."),
 
             ('ssl-strict',
@@ -400,20 +448,31 @@ def data(readonly=False):
              "Whether to validate SSL handshakes."),
 
             ('dns-prefetch',
-             SettingValue(typ.Bool(), 'true'),
+             SettingValue(typ.Bool(), 'true',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Whether to try to pre-fetch DNS entries to speed up browsing."),
 
             ('custom-headers',
              SettingValue(typ.HeaderDict(none_ok=True), ''),
              "Set custom headers for qutebrowser HTTP requests."),
 
+            ('netrc-file',
+             SettingValue(typ.File(none_ok=True), ''),
+             "Set location of a netrc-file for HTTP authentication. If empty, "
+             "~/.netrc is used."),
+
             readonly=readonly
         )),
 
         ('completion', sect.KeyValue(
-            ('auto-open',
-             SettingValue(typ.Bool(), 'true'),
-             "Automatically open completion when typing."),
+            ('show',
+             SettingValue(typ.String(
+                 valid_values=typ.ValidValues(
+                     ('always', "Whenever a completion is available."),
+                     ('auto', "Whenever a completion is requested."),
+                     ('never', "Never.")
+                 )), 'always'),
+             "When to show the autocompletion window."),
 
             ('download-path-suggestion',
              SettingValue(
@@ -427,10 +486,6 @@ def data(readonly=False):
             ('timestamp-format',
              SettingValue(typ.TimestampTemplate(none_ok=True), '%Y-%m-%d'),
              "How to format timestamps (e.g. for history)"),
-
-            ('show',
-             SettingValue(typ.Bool(), 'true'),
-             "Whether to show the autocompletion window."),
 
             ('height',
              SettingValue(typ.PercOrInt(minperc=0, maxperc=100, minint=1),
@@ -472,13 +527,13 @@ def data(readonly=False):
         ('input', sect.KeyValue(
             ('timeout',
              SettingValue(typ.Int(minval=0, maxval=MAXVALS['int']), '500'),
-             "Timeout for ambiguous key bindings.\n\n"
+             "Timeout (in milliseconds) for ambiguous key bindings.\n\n"
              "If the current input forms both a complete match and a partial "
              "match, the complete match will be executed after this time."),
 
             ('partial-timeout',
              SettingValue(typ.Int(minval=0, maxval=MAXVALS['int']), '5000'),
-             "Timeout for partially typed key bindings.\n\n"
+             "Timeout (in milliseconds) for partially typed key bindings.\n\n"
              "If the current input forms only partial matches, the keystring "
              "will be cleared after this time."),
 
@@ -542,11 +597,11 @@ def data(readonly=False):
              "background."),
 
             ('select-on-remove',
-             SettingValue(typ.SelectOnRemove(), 'right'),
+             SettingValue(typ.SelectOnRemove(), 'next'),
              "Which tab to select when the focused tab is removed."),
 
             ('new-tab-position',
-             SettingValue(typ.NewTabPosition(), 'right'),
+             SettingValue(typ.NewTabPosition(), 'next'),
              "How new tabs are positioned."),
 
             ('new-tab-position-explicit',
@@ -623,7 +678,8 @@ def data(readonly=False):
             ('title-format',
              SettingValue(typ.FormatString(
                  fields=['perc', 'perc_raw', 'title', 'title_sep', 'index',
-                         'id', 'scroll_pos', 'host']), '{index}: {title}'),
+                         'id', 'scroll_pos', 'host'], none_ok=True),
+                 '{index}: {title}'),
              "The format to use for the tab title. The following placeholders "
              "are defined:\n\n"
              "* `{perc}`: The percentage as a string like `[10%]`.\n"
@@ -634,7 +690,8 @@ def data(readonly=False):
              "* `{index}`: The index of this tab.\n"
              "* `{id}`: The internal tab ID of this tab.\n"
              "* `{scroll_pos}`: The page scroll position.\n"
-             "* `{host}`: The host of the current web page."),
+             "* `{host}`: The host of the current web page.\n"
+             "* `{backend}`: Either 'webkit' or 'webengine'"),
 
             ('title-alignment',
              SettingValue(typ.TextAlignment(), 'left'),
@@ -673,7 +730,8 @@ def data(readonly=False):
 
             ('maximum-pages-in-cache',
              SettingValue(
-                 typ.Int(none_ok=True, minval=0, maxval=MAXVALS['int']), ''),
+                 typ.Int(none_ok=True, minval=0, maxval=MAXVALS['int']), '',
+                 backends=[usertypes.Backend.QtWebKit]),
              "The maximum number of pages to hold in the global memory page "
              "cache.\n\n"
              "The Page Cache allows for a nicer user experience when "
@@ -684,8 +742,9 @@ def data(readonly=False):
 
             ('object-cache-capacities',
              SettingValue(
-                 typ.WebKitBytesList(length=3, maxsize=MAXVALS['int'],
-                                     none_ok=True), ''),
+                 typ.List(typ.WebKitBytes(maxsize=MAXVALS['int'],
+                          none_ok=True), none_ok=True, length=3), '',
+                 backends=[usertypes.Backend.QtWebKit]),
              "The capacities for the global memory cache for dead objects "
              "such as stylesheets or scripts. Syntax: cacheMinDeadCapacity, "
              "cacheMaxDead, totalCapacity.\n\n"
@@ -699,21 +758,25 @@ def data(readonly=False):
 
             ('offline-storage-default-quota',
              SettingValue(typ.WebKitBytes(maxsize=MAXVALS['int64'],
-                                          none_ok=True), ''),
+                                          none_ok=True), '',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Default quota for new offline storage databases."),
 
             ('offline-web-application-cache-quota',
              SettingValue(typ.WebKitBytes(maxsize=MAXVALS['int64'],
-                                          none_ok=True), ''),
+                                          none_ok=True), '',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Quota for the offline web application cache."),
 
             ('offline-storage-database',
-             SettingValue(typ.Bool(), 'true'),
+             SettingValue(typ.Bool(), 'true',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Whether support for the HTML 5 offline storage feature is "
              "enabled."),
 
             ('offline-web-application-storage',
-             SettingValue(typ.Bool(), 'true'),
+             SettingValue(typ.Bool(), 'true',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Whether support for the HTML 5 web application cache feature is "
              "enabled.\n\n"
              "An application cache acts like an HTTP cache in some sense. For "
@@ -753,10 +816,12 @@ def data(readonly=False):
 
             ('webgl',
              SettingValue(typ.Bool(), 'false'),
-             "Enables or disables WebGL."),
+             "Enables or disables WebGL. For QtWebEngine, Qt/PyQt >= 5.7 is "
+             "required for this setting."),
 
             ('css-regions',
-             SettingValue(typ.Bool(), 'true'),
+             SettingValue(typ.Bool(), 'true',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Enable or disable support for CSS regions."),
 
             ('hyperlink-auditing',
@@ -771,17 +836,19 @@ def data(readonly=False):
              SettingValue(typ.BoolAsk(), 'ask'),
              "Allow websites to show notifications."),
 
-            #('allow-java',
-            # SettingValue(typ.Bool(), 'true'),
-            # "Enables or disables Java applets. Currently Java applets are "
-            # "not supported"),
+            ('media-capture',
+             SettingValue(typ.BoolAsk(), 'ask',
+                          backends=[usertypes.Backend.QtWebEngine]),
+             "Allow websites to record audio/video."),
 
-            ('javascript-can-open-windows',
+            ('javascript-can-open-windows-automatically',
              SettingValue(typ.Bool(), 'false'),
-             "Whether JavaScript programs can open new windows."),
+             "Whether JavaScript programs can open new windows without user "
+             "interaction."),
 
             ('javascript-can-close-windows',
-             SettingValue(typ.Bool(), 'false'),
+             SettingValue(typ.Bool(), 'false',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Whether JavaScript programs can close windows."),
 
             ('javascript-can-access-clipboard',
@@ -817,21 +884,22 @@ def data(readonly=False):
                       "the same origin only, unless a cookie is "
                       "already set for the domain."),
                      ('never', "Don't accept cookies at all.")
-                 )), 'no-3rdparty'),
+                 )), 'no-3rdparty', backends=[usertypes.Backend.QtWebKit]),
              "Control which cookies to accept."),
 
             ('cookies-store',
-             SettingValue(typ.Bool(), 'true'),
+             SettingValue(typ.Bool(), 'true',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Whether to store cookies."),
 
             ('host-block-lists',
              SettingValue(
-                 typ.UrlList(none_ok=True),
-                 'http://www.malwaredomainlist.com/hostslist/hosts.txt,'
+                 typ.List(typ.Url(), none_ok=True),
+                 'https://www.malwaredomainlist.com/hostslist/hosts.txt,'
                  'http://someonewhocares.org/hosts/hosts,'
                  'http://winhelp2002.mvps.org/hosts.zip,'
                  'http://malwaredomains.lehigh.edu/files/justdomains.zip,'
-                 'http://pgl.yoyo.org/adservers/serverlist.php?'
+                 'https://pgl.yoyo.org/adservers/serverlist.php?'
                  'hostformat=hosts&mimetype=plaintext'),
              "List of URLs of lists which contain hosts to block.\n\n"
              "The file can be in one of the following formats:\n\n"
@@ -845,7 +913,7 @@ def data(readonly=False):
              "Whether host blocking is enabled."),
 
             ('host-blocking-whitelist',
-             SettingValue(typ.List(none_ok=True), 'piwik.org'),
+             SettingValue(typ.List(typ.String(), none_ok=True), 'piwik.org'),
              "List of domains that should always be loaded, despite being "
              "ad-blocked.\n\n"
              "Domains may contain * and ? wildcards and are otherwise "
@@ -864,10 +932,6 @@ def data(readonly=False):
             ('border',
              SettingValue(typ.String(), '1px solid #E3BE23'),
              "CSS border value for hints."),
-
-            ('opacity',
-             SettingValue(typ.Float(minval=0.0, maxval=1.0), '0.7'),
-             "Opacity for hints."),
 
             ('mode',
              SettingValue(typ.String(
@@ -906,23 +970,35 @@ def data(readonly=False):
              "The dictionary file to be used by the word hints."),
 
             ('auto-follow',
-             SettingValue(typ.Bool(), 'true'),
-             "Follow a hint immediately when the hint text is completely "
-             "matched."),
+             SettingValue(typ.String(
+                 valid_values=typ.ValidValues(
+                     ('always', "Auto-follow whenever there is only a single "
+                      "hint on a page."),
+                     ('unique-match', "Auto-follow whenever there is a unique "
+                      "non-empty match in either the hint string (word mode) "
+                      "or filter (number mode)."),
+                     ('full-match', "Follow the hint when the user typed the "
+                      "whole hint (letter, word or number mode) or the "
+                      "element's text (only in number mode)."),
+                     ('never', "The user will always need to press Enter to "
+                      "follow a hint."),
+                 )), 'unique-match'),
+             "Controls when a hint can be automatically followed without the "
+             "user pressing Enter."),
 
             ('auto-follow-timeout',
              SettingValue(typ.Int(), '0'),
-             "A timeout to inhibit normal-mode key bindings after a successful"
-             "auto-follow."),
+             "A timeout (in milliseconds) to inhibit normal-mode key bindings "
+             "after a successful auto-follow."),
 
             ('next-regexes',
-             SettingValue(typ.RegexList(flags=re.IGNORECASE),
+             SettingValue(typ.List(typ.Regex(flags=re.IGNORECASE)),
                           r'\bnext\b,\bmore\b,\bnewer\b,\b[>→≫]\b,\b(>>|»)\b,'
                           r'\bcontinue\b'),
              "A comma-separated list of regexes to use for 'next' links."),
 
             ('prev-regexes',
-             SettingValue(typ.RegexList(flags=re.IGNORECASE),
+             SettingValue(typ.List(typ.Regex(flags=re.IGNORECASE)),
                           r'\bprev(ious)?\b,\bback\b,\bolder\b,\b[<←≪]\b,'
                           r'\b(<<|«)\b'),
              "A comma-separated list of regexes to use for 'prev' links."),
@@ -932,8 +1008,12 @@ def data(readonly=False):
                  valid_values=typ.ValidValues(
                      ('javascript', "Better but slower"),
                      ('python', "Slightly worse but faster"),
-                 )), 'javascript'),
+                 )), 'python'),
              "Which implementation to use to find elements to hint."),
+
+            ('hide-unmatched-rapid-hints',
+             SettingValue(typ.Bool(), 'true'),
+             "Controls hiding unmatched hints in rapid mode."),
 
             readonly=readonly
         )),
@@ -1017,30 +1097,6 @@ def data(readonly=False):
             ('statusbar.bg',
              SettingValue(typ.QssColor(), 'black'),
              "Background color of the statusbar."),
-
-            ('statusbar.fg.error',
-             SettingValue(typ.QssColor(), '${statusbar.fg}'),
-             "Foreground color of the statusbar if there was an error."),
-
-            ('statusbar.bg.error',
-             SettingValue(typ.QssColor(), 'red'),
-             "Background color of the statusbar if there was an error."),
-
-            ('statusbar.fg.warning',
-             SettingValue(typ.QssColor(), '${statusbar.fg}'),
-             "Foreground color of the statusbar if there is a warning."),
-
-            ('statusbar.bg.warning',
-             SettingValue(typ.QssColor(), 'darkorange'),
-             "Background color of the statusbar if there is a warning."),
-
-            ('statusbar.fg.prompt',
-             SettingValue(typ.QssColor(), '${statusbar.fg}'),
-             "Foreground color of the statusbar if there is a prompt."),
-
-            ('statusbar.bg.prompt',
-             SettingValue(typ.QssColor(), 'darkblue'),
-             "Background color of the statusbar if there is a prompt."),
 
             ('statusbar.fg.insert',
              SettingValue(typ.QssColor(), '${statusbar.fg}'),
@@ -1161,18 +1217,18 @@ def data(readonly=False):
              "Color gradient interpolation system for the tab indicator."),
 
             ('hints.fg',
-             SettingValue(typ.CssColor(), 'black'),
+             SettingValue(typ.QssColor(), 'black'),
              "Font color for hints."),
 
             ('hints.bg',
-             SettingValue(
-                 typ.CssColor(), '-webkit-gradient(linear, left top, '
-                 'left bottom, color-stop(0%,#FFF785), '
-                 'color-stop(100%,#FFC542))'),
-             "Background color for hints."),
+             SettingValue(typ.QssColor(), 'qlineargradient(x1:0, y1:0, x2:0, '
+                          'y2:1, stop:0 rgba(255, 247, 133, 0.8), '
+                          'stop:1 rgba(255, 197, 66, 0.8))'),
+             "Background color for hints. Note that you can use a `rgba(...)` "
+             "value for transparency."),
 
             ('hints.fg.match',
-             SettingValue(typ.CssColor(), 'green'),
+             SettingValue(typ.QssColor(), 'green'),
              "Font color for the matched part of hints."),
 
             ('downloads.bg.bar',
@@ -1212,7 +1268,8 @@ def data(readonly=False):
              "Background color for downloads with errors."),
 
             ('webpage.bg',
-             SettingValue(typ.QtColor(none_ok=True), 'white'),
+             SettingValue(typ.QtColor(none_ok=True), 'white',
+                          backends=[usertypes.Backend.QtWebKit]),
              "Background color for webpages if unset (or empty to use the "
              "theme's color)"),
 
@@ -1227,6 +1284,54 @@ def data(readonly=False):
             ('keyhint.bg',
              SettingValue(typ.QssColor(), 'rgba(0, 0, 0, 80%)'),
              "Background color of the keyhint widget."),
+
+            ('messages.fg.error',
+             SettingValue(typ.QssColor(), 'white'),
+             "Foreground color of an error message."),
+
+            ('messages.bg.error',
+             SettingValue(typ.QssColor(), 'red'),
+             "Background color of an error message."),
+
+            ('messages.border.error',
+             SettingValue(typ.QssColor(), '#bb0000'),
+             "Border color of an error message."),
+
+            ('messages.fg.warning',
+             SettingValue(typ.QssColor(), 'white'),
+             "Foreground color a warning message."),
+
+            ('messages.bg.warning',
+             SettingValue(typ.QssColor(), 'darkorange'),
+             "Background color of a warning message."),
+
+            ('messages.border.warning',
+             SettingValue(typ.QssColor(), '#d47300'),
+             "Border color of an error message."),
+
+            ('messages.fg.info',
+             SettingValue(typ.QssColor(), 'white'),
+             "Foreground color an info message."),
+
+            ('messages.bg.info',
+             SettingValue(typ.QssColor(), 'black'),
+             "Background color of an info message."),
+
+            ('messages.border.info',
+             SettingValue(typ.QssColor(), '#333333'),
+             "Border color of an info message."),
+
+            ('prompts.fg',
+             SettingValue(typ.QssColor(), 'white'),
+             "Foreground color for prompts."),
+
+            ('prompts.bg',
+             SettingValue(typ.QssColor(), 'darkblue'),
+             "Background color for prompts."),
+
+            ('prompts.selected.bg',
+             SettingValue(typ.QssColor(), '#308cc6'),
+             "Background color for the selected item in filename prompts."),
 
             readonly=readonly
         )),
@@ -1244,6 +1349,10 @@ def data(readonly=False):
              SettingValue(typ.Font(), DEFAULT_FONT_SIZE + ' ${_monospace}'),
              "Font used in the completion widget."),
 
+            ('completion.category',
+             SettingValue(typ.Font(), 'bold ${completion}'),
+             "Font used in the completion categories."),
+
             ('tabbar',
              SettingValue(typ.QtFont(), DEFAULT_FONT_SIZE + ' ${_monospace}'),
              "Font used in the tab bar."),
@@ -1257,7 +1366,7 @@ def data(readonly=False):
              "Font used for the downloadbar."),
 
             ('hints',
-             SettingValue(typ.Font(), 'bold 13px Monospace'),
+             SettingValue(typ.Font(), 'bold 13px ${_monospace}'),
              "Font used for the hints."),
 
             ('debug-console',
@@ -1313,6 +1422,22 @@ def data(readonly=False):
              SettingValue(typ.Font(), DEFAULT_FONT_SIZE + ' ${_monospace}'),
              "Font used in the keyhint widget."),
 
+            ('messages.error',
+             SettingValue(typ.Font(), DEFAULT_FONT_SIZE + ' ${_monospace}'),
+             "Font used for error messages."),
+
+            ('messages.warning',
+             SettingValue(typ.Font(), DEFAULT_FONT_SIZE + ' ${_monospace}'),
+             "Font used for warning messages."),
+
+            ('messages.info',
+             SettingValue(typ.Font(), DEFAULT_FONT_SIZE + ' ${_monospace}'),
+             "Font used for info messages."),
+
+            ('prompts',
+             SettingValue(typ.Font(), DEFAULT_FONT_SIZE + ' sans-serif'),
+             "Font used for prompts."),
+
             readonly=readonly
         )),
     ])
@@ -1351,8 +1476,7 @@ KEY_FIRST_COMMENT = """
 #
 # For simple keys (no `<>`-signs), a capital letter means the key is pressed
 # with Shift. For special keys (with `<>`-signs), you need to explicitly add
-# `Shift-` to match a key pressed with shift.  You can bind multiple commands
-# by separating them with `;;`.
+# `Shift-` to match a key pressed with shift.
 #
 # Note that default keybindings are always bound, and need to be explicitly
 # unbound if you wish to remove them:
@@ -1390,8 +1514,7 @@ KEY_SECTION_DESC = {
         "Useful hidden commands to map in this section:\n\n"
         " * `command-history-prev`: Switch to previous command in history.\n"
         " * `command-history-next`: Switch to next command in history.\n"
-        " * `completion-item-prev`: Select previous item in completion.\n"
-        " * `completion-item-next`: Select next item in completion.\n"
+        " * `completion-item-focus`: Select another item in completion.\n"
         " * `command-accept`: Execute the command currently in the "
         "commandline."),
     'prompt': (
@@ -1401,8 +1524,8 @@ KEY_SECTION_DESC = {
         "bind special keys.\n"
         "Useful hidden commands to map in this section:\n\n"
         " * `prompt-accept`: Confirm the entered value.\n"
-        " * `prompt-yes`: Answer yes to a yes/no question.\n"
-        " * `prompt-no`: Answer no to a yes/no question."),
+        " * `prompt-accept yes`: Answer yes to a yes/no question.\n"
+        " * `prompt-accept no`: Answer no to a yes/no question."),
     'caret': (
         ""),
 }
@@ -1416,7 +1539,7 @@ RETURN_KEYS = ['<Return>', '<Ctrl-M>', '<Ctrl-J>', '<Shift-Return>', '<Enter>',
 
 KEY_DATA = collections.OrderedDict([
     ('!normal', collections.OrderedDict([
-        ('clear-keychain ;; leave-mode', ['<Escape>', '<Ctrl-[>']),
+        ('leave-mode', ['<Escape>', '<Ctrl-[>']),
     ])),
 
     ('normal', collections.OrderedDict([
@@ -1424,11 +1547,14 @@ KEY_DATA = collections.OrderedDict([
         ('set-cmd-text -s :open', ['o']),
         ('set-cmd-text :open {url:pretty}', ['go']),
         ('set-cmd-text -s :open -t', ['O']),
-        ('set-cmd-text :open -t {url:pretty}', ['gO']),
+        ('set-cmd-text :open -t -i {url:pretty}', ['gO']),
         ('set-cmd-text -s :open -b', ['xo']),
-        ('set-cmd-text :open -b {url:pretty}', ['xO']),
+        ('set-cmd-text :open -b -i {url:pretty}', ['xO']),
         ('set-cmd-text -s :open -w', ['wo']),
         ('set-cmd-text :open -w {url:pretty}', ['wO']),
+        ('set-cmd-text /', ['/']),
+        ('set-cmd-text ?', ['?']),
+        ('set-cmd-text :', [':']),
         ('open -t', ['ga', '<Ctrl-T>']),
         ('open -w', ['<Ctrl-N>']),
         ('tab-close', ['d', '<Ctrl-W>']),
@@ -1438,15 +1564,15 @@ KEY_DATA = collections.OrderedDict([
         ('tab-move', ['gm']),
         ('tab-move -', ['gl']),
         ('tab-move +', ['gr']),
-        ('tab-focus', ['J', '<Ctrl-PgDown>']),
+        ('tab-next', ['J', '<Ctrl-PgDown>']),
         ('tab-prev', ['K', '<Ctrl-PgUp>']),
         ('tab-clone', ['gC']),
         ('reload', ['r', '<F5>']),
         ('reload -f', ['R', '<Ctrl-F5>']),
-        ('back', ['H']),
+        ('back', ['H', '<back>']),
         ('back -t', ['th']),
         ('back -w', ['wh']),
-        ('forward', ['L']),
+        ('forward', ['L', '<forward>']),
         ('forward -t', ['tl']),
         ('forward -w', ['wl']),
         ('fullscreen', ['<F11>']),
@@ -1459,7 +1585,7 @@ KEY_DATA = collections.OrderedDict([
         ('hint images', [';i']),
         ('hint images tab', [';I']),
         ('hint links fill :open {hint-url}', [';o']),
-        ('hint links fill :open -t {hint-url}', [';O']),
+        ('hint links fill :open -t -i {hint-url}', [';O']),
         ('hint links yank', [';y']),
         ('hint links yank-primary', [';Y']),
         ('hint --rapid links tab-bg', [';r']),
@@ -1481,18 +1607,18 @@ KEY_DATA = collections.OrderedDict([
         ('enter-mode jump_mark', ["'"]),
         ('yank', ['yy']),
         ('yank -s', ['yY']),
-        ('yank -t', ['yt']),
-        ('yank -ts', ['yT']),
-        ('yank -d', ['yd']),
-        ('yank -ds', ['yD']),
-        ('yank -p', ['yp']),
-        ('yank -ps', ['yP']),
-        ('paste', ['pp']),
-        ('paste -s', ['pP']),
-        ('paste -t', ['Pp']),
-        ('paste -ts', ['PP']),
-        ('paste -w', ['wp']),
-        ('paste -ws', ['wP']),
+        ('yank title', ['yt']),
+        ('yank title -s', ['yT']),
+        ('yank domain', ['yd']),
+        ('yank domain -s', ['yD']),
+        ('yank pretty-url', ['yp']),
+        ('yank pretty-url -s', ['yP']),
+        ('open -- {clipboard}', ['pp']),
+        ('open -- {primary}', ['pP']),
+        ('open -t -- {clipboard}', ['Pp']),
+        ('open -t -- {primary}', ['PP']),
+        ('open -w -- {clipboard}', ['wp']),
+        ('open -w -- {primary}', ['wP']),
         ('quickmark-save', ['m']),
         ('set-cmd-text -s :quickmark-load', ['b']),
         ('set-cmd-text -s :quickmark-load -t', ['B']),
@@ -1545,11 +1671,13 @@ KEY_DATA = collections.OrderedDict([
         ('follow-selected', RETURN_KEYS),
         ('follow-selected -t', ['<Ctrl-Return>', '<Ctrl-Enter>']),
         ('repeat-command', ['.']),
+        ('record-macro', ['q']),
+        ('run-macro', ['@']),
     ])),
 
     ('insert', collections.OrderedDict([
         ('open-editor', ['<Ctrl-E>']),
-        ('paste-primary', ['<Shift-Ins>']),
+        ('insert-text {primary}', ['<Shift-Ins>']),
     ])),
 
     ('hint', collections.OrderedDict([
@@ -1564,17 +1692,21 @@ KEY_DATA = collections.OrderedDict([
     ('command', collections.OrderedDict([
         ('command-history-prev', ['<Ctrl-P>']),
         ('command-history-next', ['<Ctrl-N>']),
-        ('completion-item-prev', ['<Shift-Tab>', '<Up>']),
-        ('completion-item-next', ['<Tab>', '<Down>']),
+        ('completion-item-focus prev', ['<Shift-Tab>', '<Up>']),
+        ('completion-item-focus next', ['<Tab>', '<Down>']),
+        ('completion-item-focus next-category', ['<Ctrl-Tab>']),
+        ('completion-item-focus prev-category', ['<Ctrl-Shift-Tab>']),
         ('completion-item-del', ['<Ctrl-D>']),
         ('command-accept', RETURN_KEYS),
     ])),
 
     ('prompt', collections.OrderedDict([
         ('prompt-accept', RETURN_KEYS),
-        ('prompt-yes', ['y']),
-        ('prompt-no', ['n']),
+        ('prompt-accept yes', ['y']),
+        ('prompt-accept no', ['n']),
         ('prompt-open-download', ['<Ctrl-X>']),
+        ('prompt-item-focus prev', ['<Shift-Tab>', '<Up>']),
+        ('prompt-item-focus next', ['<Tab>', '<Down>']),
     ])),
 
     ('command,prompt', collections.OrderedDict([
@@ -1587,7 +1719,8 @@ KEY_DATA = collections.OrderedDict([
         ('rl-unix-line-discard', ['<Ctrl-U>']),
         ('rl-kill-line', ['<Ctrl-K>']),
         ('rl-kill-word', ['<Alt-D>']),
-        ('rl-unix-word-rubout', ['<Ctrl-W>', '<Alt-Backspace>']),
+        ('rl-unix-word-rubout', ['<Ctrl-W>']),
+        ('rl-backward-kill-word', ['<Alt-Backspace>']),
         ('rl-yank', ['<Ctrl-Y>']),
         ('rl-delete-char', ['<Ctrl-?>']),
         ('rl-backward-delete-char', ['<Ctrl-H>']),
@@ -1612,8 +1745,8 @@ KEY_DATA = collections.OrderedDict([
         ('move-to-end-of-line', ['$']),
         ('move-to-start-of-document', ['gg']),
         ('move-to-end-of-document', ['G']),
-        ('yank-selected -p', ['Y']),
-        ('yank-selected', ['y'] + RETURN_KEYS),
+        ('yank selection -s', ['Y']),
+        ('yank selection', ['y'] + RETURN_KEYS),
         ('scroll left', ['H']),
         ('scroll down', ['J']),
         ('scroll up', ['K']),
@@ -1646,9 +1779,52 @@ CHANGED_KEY_COMMANDS = [
     (re.compile(r'^scroll ([-\d]+ [-\d]+)$'), r'scroll-px \1'),
 
     (re.compile(r'^search *;; *clear-keychain$'), r'clear-keychain ;; search'),
-    (re.compile(r'^leave-mode$'), r'clear-keychain ;; leave-mode'),
+    (re.compile(r'^clear-keychain *;; *leave-mode$'), r'leave-mode'),
 
     (re.compile(r'^download-remove --all$'), r'download-clear'),
 
     (re.compile(r'^hint links fill "([^"]*)"$'), r'hint links fill \1'),
+
+    (re.compile(r'^yank -t(\S+)'), r'yank title -\1'),
+    (re.compile(r'^yank -t'), r'yank title'),
+    (re.compile(r'^yank -d(\S+)'), r'yank domain -\1'),
+    (re.compile(r'^yank -d'), r'yank domain'),
+    (re.compile(r'^yank -p(\S+)'), r'yank pretty-url -\1'),
+    (re.compile(r'^yank -p'), r'yank pretty-url'),
+    (re.compile(r'^yank-selected -p'), r'yank selection -s'),
+    (re.compile(r'^yank-selected'), r'yank selection'),
+
+    (re.compile(r'^paste$'), r'open -- {clipboard}'),
+    (re.compile(r'^paste -s$'), r'open -- {primary}'),
+    (re.compile(r'^paste -([twb])$'), r'open -\1 -- {clipboard}'),
+    (re.compile(r'^paste -([twb])s$'), r'open -\1 -- {primary}'),
+    (re.compile(r'^paste -s([twb])$'), r'open -\1 -- {primary}'),
+
+    (re.compile(r'^completion-item-next'), r'completion-item-focus next'),
+    (re.compile(r'^completion-item-prev'), r'completion-item-focus prev'),
+
+    (re.compile(r'^open {clipboard}$'), r'open -- {clipboard}'),
+    (re.compile(r'^open -([twb]) {clipboard}$'), r'open -\1 -- {clipboard}'),
+    (re.compile(r'^open {primary}$'), r'open -- {primary}'),
+    (re.compile(r'^open -([twb]) {primary}$'), r'open -\1 -- {primary}'),
+
+    (re.compile(r'^paste-primary$'), r'insert-text {primary}'),
+
+    (re.compile(r'^set-cmd-text -s :search$'), r'set-cmd-text /'),
+    (re.compile(r'^set-cmd-text -s :search -r$'), r'set-cmd-text ?'),
+    (re.compile(r'^set-cmd-text -s :$'), r'set-cmd-text :'),
+    (re.compile(r'^set-cmd-text -s :set keybind$'), r'set-cmd-text -s :bind'),
+
+    (re.compile(r'^prompt-yes$'), r'prompt-accept yes'),
+    (re.compile(r'^prompt-no$'), r'prompt-accept no'),
+
+    (re.compile(r'^tab-close -l$'), r'tab-close --prev'),
+    (re.compile(r'^tab-close --left$'), r'tab-close --prev'),
+    (re.compile(r'^tab-close -r$'), r'tab-close --next'),
+    (re.compile(r'^tab-close --right$'), r'tab-close --next'),
+
+    (re.compile(r'^tab-only -l$'), r'tab-only --prev'),
+    (re.compile(r'^tab-only --left$'), r'tab-only --prev'),
+    (re.compile(r'^tab-only -r$'), r'tab-only --next'),
+    (re.compile(r'^tab-only --right$'), r'tab-only --next'),
 ]

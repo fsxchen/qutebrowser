@@ -73,6 +73,10 @@ Feature: Keyboard input
         And I run :bind <test26>
         Then the message "<test26> is bound to 'mib' in normal mode" should be shown
 
+    Scenario: Binding with an unsupported mode
+        When I run :bind --mode=caret test27 rl-unix-filename-rubout
+        Then the error "rl-unix-filename-rubout: This command is only allowed in command/prompt mode, not caret." should be shown
+
     # :unbind
 
     Scenario: Binding and unbinding a keychain
@@ -92,7 +96,7 @@ Feature: Keyboard input
     Scenario: Unbinding a built-in binding
         When I run :unbind o
         And I press the key "o"
-        Then "No binding found for o." should be logged
+        Then "Giving up with 'o', no matches" should be logged
         # maybe check it's unbound in the config?
 
     Scenario: Binding and unbinding a special keychain with differing case (issue 1544)
@@ -117,11 +121,11 @@ Feature: Keyboard input
         When I open data/keyinput/log.html
         And I set general -> log-javascript-console to info
         And I set input -> forward-unbound-keys to all
-        And I press the key "q"
+        And I press the key ","
         And I press the key "<F1>"
-        # q
-        Then the javascript message "key press: 81" should be logged
-        And the javascript message "key release: 81" should be logged
+        # ,
+        Then the javascript message "key press: 188" should be logged
+        And the javascript message "key release: 188" should be logged
         # <F1>
         And the javascript message "key press: 112" should be logged
         And the javascript message "key release: 112" should be logged
@@ -161,7 +165,7 @@ Feature: Keyboard input
         Then the javascript message "key press: 88" should be logged
         And the javascript message "key release: 88" should be logged
 
-    @no_xvfb @posix
+    @no_xvfb @posix @qtwebengine_skip
     Scenario: :fake-key sending key to the website with other window focused
         When I open data/keyinput/log.html
         And I set general -> developer-extras to true
@@ -192,3 +196,67 @@ Feature: Keyboard input
         When I run :fake-key -g x
         And I wait for "got keypress in mode KeyMode.normal - delegating to <qutebrowser.keyinput.modeparsers.NormalKeyParser>" in the log
         Then no crash should happen
+
+    # Macros
+
+    Scenario: Recording a simple macro
+        Given I open data/scroll/simple.html
+        And I run :tab-only
+        When I run :scroll down with count 6
+        And I wait until the scroll position changed
+        And I run :record-macro
+        And I press the key "a"
+        And I run :scroll up
+        And I run :scroll up
+        And I wait until the scroll position changed
+        And I run :record-macro
+        And I run :run-macro with count 2
+        And I press the key "a"
+        And I wait until the scroll position changed to 0/0
+        Then the page should not be scrolled
+
+    Scenario: Recording a named macro
+        Given I open data/scroll/simple.html
+        And I run :tab-only
+        When I run :scroll down with count 6
+        And I wait until the scroll position changed
+        And I run :record-macro foo
+        And I run :scroll up
+        And I run :scroll up
+        And I wait until the scroll position changed
+        And I run :record-macro foo
+        And I run :run-macro foo with count 2
+        And I wait until the scroll position changed to 0/0
+        Then the page should not be scrolled
+
+    Scenario: Running an invalid macro
+        Given I open data/scroll/simple.html
+        And I run :tab-only
+        When I run :run-macro
+        And I press the key "b"
+        Then the error "No macro recorded in 'b'!" should be shown
+        And no crash should happen
+
+    Scenario: Running an invalid named macro
+        Given I open data/scroll/simple.html
+        And I run :tab-only
+        When I run :run-macro bar
+        Then the error "No macro recorded in 'bar'!" should be shown
+        And no crash should happen
+
+    Scenario: Running a macro with a mode-switching command
+        When I open data/hints/html/simple.html
+        And I run :record-macro a
+        And I run :hint links normal
+        And I wait for "hints: *" in the log
+        And I run :leave-mode
+        And I run :record-macro a
+        And I run :run-macro
+        And I press the key "a"
+        And I wait for "hints: *" in the log
+        Then no crash should happen
+
+    Scenario: Cancelling key input
+        When I run :record-macro
+        And I press the key "<Escape>"
+        Then "Leaving mode KeyMode.record_macro (reason: leave current)" should be logged

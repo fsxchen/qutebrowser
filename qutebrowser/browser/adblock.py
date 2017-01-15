@@ -26,9 +26,10 @@ import posixpath
 import zipfile
 import fnmatch
 
+from qutebrowser.browser import downloads
 from qutebrowser.config import config
-from qutebrowser.utils import objreg, standarddir, log, message, usertypes
-from qutebrowser.commands import cmdutils, cmdexc
+from qutebrowser.utils import objreg, standarddir, log, message
+from qutebrowser.commands import cmdutils
 
 
 def guess_zip_filename(zf):
@@ -112,17 +113,11 @@ class HostBlocker:
         self._done_count = 0
 
         data_dir = standarddir.data()
-        if data_dir is None:
-            self._local_hosts_file = None
-        else:
-            self._local_hosts_file = os.path.join(data_dir, 'blocked-hosts')
+        self._local_hosts_file = os.path.join(data_dir, 'blocked-hosts')
         self.on_config_changed()
 
         config_dir = standarddir.config()
-        if config_dir is None:
-            self._config_hosts_file = None
-        else:
-            self._config_hosts_file = os.path.join(config_dir, 'blocked-hosts')
+        self._config_hosts_file = os.path.join(config_dir, 'blocked-hosts')
 
         objreg.get('config').changed.connect(self.on_config_changed)
 
@@ -145,7 +140,7 @@ class HostBlocker:
         Return:
             True if a read was attempted, False otherwise
         """
-        if filename is None or not os.path.exists(filename):
+        if not os.path.exists(filename):
             return False
 
         try:
@@ -161,9 +156,6 @@ class HostBlocker:
         """Read hosts from the existing blocked-hosts file."""
         self._blocked_hosts = set()
 
-        if self._local_hosts_file is None:
-            return
-
         self._read_hosts_file(self._config_hosts_file,
                               self._config_blocked_hosts)
 
@@ -174,26 +166,22 @@ class HostBlocker:
             args = objreg.get('args')
             if (config.get('content', 'host-block-lists') is not None and
                     args.basedir is None):
-                message.info('current',
-                             "Run :adblock-update to get adblock lists.")
+                message.info("Run :adblock-update to get adblock lists.")
 
     @cmdutils.register(instance='host-blocker')
-    @cmdutils.argument('win_id', win_id=True)
-    def adblock_update(self, win_id):
+    def adblock_update(self):
         """Update the adblock block lists.
 
-        This updates ~/.local/share/qutebrowser/blocked-hosts with downloaded
-        host lists and re-reads ~/.config/qutebrowser/blocked-hosts.
+        This updates `~/.local/share/qutebrowser/blocked-hosts` with downloaded
+        host lists and re-reads `~/.config/qutebrowser/blocked-hosts`.
         """
         self._read_hosts_file(self._config_hosts_file,
                               self._config_blocked_hosts)
-        if self._local_hosts_file is None:
-            raise cmdexc.CommandError("No data storage is configured!")
         self._blocked_hosts = set()
         self._done_count = 0
         urls = config.get('content', 'host-block-lists')
-        download_manager = objreg.get('download-manager', scope='window',
-                                      window='last-focused')
+        download_manager = objreg.get('qtnetwork-download-manager',
+                                      scope='window', window='last-focused')
         if urls is None:
             return
         for url in urls:
@@ -201,8 +189,8 @@ class HostBlocker:
                 try:
                     fileobj = open(url.path(), 'rb')
                 except OSError as e:
-                    message.error(win_id, "adblock: Error while reading {}: "
-                                  "{}".format(url.path(), e.strerror))
+                    message.error("adblock: Error while reading {}: {}".format(
+                        url.path(), e.strerror))
                     continue
                 download = FakeDownload(fileobj)
                 self._in_progress.append(download)
@@ -210,7 +198,7 @@ class HostBlocker:
             else:
                 fobj = io.BytesIO()
                 fobj.name = 'adblock: ' + url.host()
-                target = usertypes.FileObjDownloadTarget(fobj)
+                target = downloads.FileObjDownloadTarget(fobj)
                 download = download_manager.get(url, target=target,
                                                 auto_remove=True)
                 self._in_progress.append(download)
@@ -232,8 +220,8 @@ class HostBlocker:
             f = get_fileobj(byte_io)
         except (OSError, UnicodeDecodeError, zipfile.BadZipFile,
                 zipfile.LargeZipFile) as e:
-            message.error('current', "adblock: Error while reading {}: {} - "
-                          "{}".format(byte_io.name, e.__class__.__name__, e))
+            message.error("adblock: Error while reading {}: {} - {}".format(
+                byte_io.name, e.__class__.__name__, e))
             return
         for line in f:
             line_count += 1
@@ -261,7 +249,7 @@ class HostBlocker:
                 self._blocked_hosts.add(host)
         log.misc.debug("{}: read {} lines".format(byte_io.name, line_count))
         if error_count > 0:
-            message.error('current', "adblock: {} read errors for {}".format(
+            message.error("adblock: {} read errors for {}".format(
                 error_count, byte_io.name))
 
     def on_lists_downloaded(self):
@@ -269,14 +257,14 @@ class HostBlocker:
         with open(self._local_hosts_file, 'w', encoding='utf-8') as f:
             for host in sorted(self._blocked_hosts):
                 f.write(host + '\n')
-            message.info('current', "adblock: Read {} hosts from {} sources."
-                         .format(len(self._blocked_hosts), self._done_count))
+            message.info("adblock: Read {} hosts from {} sources.".format(
+                len(self._blocked_hosts), self._done_count))
 
     @config.change_filter('content', 'host-block-lists')
     def on_config_changed(self):
         """Update files when the config changed."""
         urls = config.get('content', 'host-block-lists')
-        if urls is None and self._local_hosts_file is not None:
+        if urls is None:
             try:
                 os.remove(self._local_hosts_file)
             except FileNotFoundError:

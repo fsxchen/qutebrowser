@@ -19,17 +19,15 @@
 
 """Tests for the global page history."""
 
-import base64
 import logging
 
 import pytest
 import hypothesis
 from hypothesis import strategies
 from PyQt5.QtCore import QUrl
-from PyQt5.QtWebKit import QWebHistoryInterface
 
-from qutebrowser.browser.webkit import history
-from qutebrowser.utils import objreg
+from qutebrowser.browser import history
+from qutebrowser.utils import objreg, urlutils
 
 
 class FakeWebHistory:
@@ -66,13 +64,6 @@ def test_async_read_twice(monkeypatch, qtbot, tmpdir, caplog):
     assert caplog.records[0].msg == expected
 
 
-def test_async_read_no_datadir(qtbot, config_stub, fake_save_manager):
-    config_stub.data = {'general': {'private-browsing': False}}
-    hist = history.WebHistory(hist_dir=None, hist_name='history')
-    with qtbot.waitSignal(hist.async_read_done):
-        list(hist.async_read())
-
-
 @pytest.mark.parametrize('redirect', [True, False])
 def test_adding_item_during_async_read(qtbot, hist, redirect):
     """Check what happens when adding URL while reading the history."""
@@ -88,7 +79,7 @@ def test_adding_item_during_async_read(qtbot, hist, redirect):
                 list(hist.async_read())
     else:
         with qtbot.waitSignals([hist.add_completion_item,
-                                hist.async_read_done]):
+                                hist.async_read_done], order='strict'):
             list(hist.async_read())
 
     assert not hist._temp_history
@@ -112,7 +103,7 @@ def test_private_browsing(qtbot, tmpdir, fake_save_manager, config_stub):
     # read
     with qtbot.assertNotEmitted(private_hist.add_completion_item), \
             qtbot.assertNotEmitted(private_hist.item_added):
-        with qtbot.waitSignals([private_hist.async_read_done]):
+        with qtbot.waitSignals([private_hist.async_read_done], order='strict'):
             list(private_hist.async_read())
 
     # after read
@@ -246,7 +237,8 @@ def test_add_item(qtbot, hist):
     list(hist.async_read())
     url = 'http://www.example.com/'
 
-    with qtbot.waitSignals([hist.add_completion_item, hist.item_added]):
+    with qtbot.waitSignals([hist.add_completion_item, hist.item_added],
+                           order='strict'):
         hist.add_url(QUrl(url), atime=12345, title="the title")
 
     entry = history.Entry(url=QUrl(url), redirect=False, atime=12345,
@@ -364,31 +356,59 @@ def test_entry_str(entry, expected):
     assert str(entry) == expected
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def hist_interface():
+    # pylint: disable=invalid-name
+    QtWebKit = pytest.importorskip('PyQt5.QtWebKit')
+    from qutebrowser.browser.webkit import webkithistory
+    QWebHistoryInterface = QtWebKit.QWebHistoryInterface
+    # pylint: enable=invalid-name
     entry = history.Entry(atime=0, url=QUrl('http://www.example.com/'),
                           title='example')
     history_dict = {'http://www.example.com/': entry}
     fake_hist = FakeWebHistory(history_dict)
-    interface = history.WebHistoryInterface(fake_hist)
+    interface = webkithistory.WebHistoryInterface(fake_hist)
     QWebHistoryInterface.setDefaultInterface(interface)
     yield
     QWebHistoryInterface.setDefaultInterface(None)
 
 
 def test_history_interface(qtbot, webview, hist_interface):
-    html = "<a href='about:blank'>foo</a>"
-    data = base64.b64encode(html.encode('utf-8')).decode('ascii')
-    url = QUrl("data:text/html;charset=utf-8;base64,{}".format(data))
+    html = b"<a href='about:blank'>foo</a>"
+    url = urlutils.data_url('text/html', html)
     with qtbot.waitSignal(webview.loadFinished):
         webview.load(url)
 
 
-def test_init(qapp, tmpdir, monkeypatch, fake_save_manager):
+@pytest.mark.parametrize('backend', ['webengine', 'webkit'])
+def test_init(backend, qapp, tmpdir, monkeypatch, fake_save_manager,
+              fake_args):
+    if backend == 'webkit':
+        pytest.importorskip('PyQt5.QtWebKitWidgets')
+
+    fake_args.backend = backend
     monkeypatch.setattr(history.standarddir, 'data', lambda: str(tmpdir))
     history.init(qapp)
     hist = objreg.get('web-history')
     assert hist.parent() is qapp
-    assert QWebHistoryInterface.defaultInterface()._history is hist
+
+    try:
+        from PyQt5.QtWebKit import QWebHistoryInterface
+    except ImportError:
+        QWebHistoryInterface = None
+
+    if backend == 'webkit':
+        default_interface = QWebHistoryInterface.defaultInterface()
+        assert default_interface._history is hist
+    else:
+        assert backend == 'webengine'
+        if QWebHistoryInterface is None:
+            default_interface = None
+        else:
+            default_interface = QWebHistoryInterface.defaultInterface()
+        # For this to work, nothing can ever have called setDefaultInterface
+        # before (so we need to test webengine before webkit)
+        assert default_interface is None
+
     assert fake_save_manager.add_saveable.called
     objreg.delete('web-history')

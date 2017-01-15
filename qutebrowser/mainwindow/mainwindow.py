@@ -24,18 +24,19 @@ import base64
 import itertools
 import functools
 
+import jinja2
 from PyQt5.QtCore import pyqtSlot, QRect, QPoint, QTimer, Qt
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QApplication
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QApplication, QSizePolicy
 
 from qutebrowser.commands import runners, cmdutils
 from qutebrowser.config import config
 from qutebrowser.utils import message, log, usertypes, qtutils, objreg, utils
-from qutebrowser.mainwindow import tabbedbrowser
+from qutebrowser.mainwindow import tabbedbrowser, messageview, prompt
 from qutebrowser.mainwindow.statusbar import bar
-from qutebrowser.completion import completionwidget
+from qutebrowser.completion import completionwidget, completer
 from qutebrowser.keyinput import modeman
-from qutebrowser.browser import commands, downloadview, hints
-from qutebrowser.browser.webkit import downloads
+from qutebrowser.browser import (commands, downloadview, hints,
+                                 qtnetworkdownloads, downloads)
 from qutebrowser.misc import crashsignal, keyhintwidget
 
 
@@ -54,38 +55,62 @@ def get_window(via_ipc, force_window=False, force_tab=False,
     """
     if force_window and force_tab:
         raise ValueError("force_window and force_tab are mutually exclusive!")
+
     if not via_ipc:
         # Initial main window
         return 0
-    window_to_raise = None
+
+    open_target = config.get('general', 'new-instance-open-target')
+
+    # Apply any target overrides, ordered by precedence
     if force_target is not None:
         open_target = force_target
-    else:
-        open_target = config.get('general', 'new-instance-open-target')
-    if (open_target == 'window' or force_window) and not force_tab:
+    if force_window:
+        open_target = 'window'
+    if force_tab and open_target == 'window':
+        # Command sent via IPC
+        open_target = 'tab-silent'
+
+    window = None
+    raise_window = False
+
+    # Try to find the existing tab target if opening in a tab
+    if open_target != 'window':
+        window = get_target_window()
+        raise_window = open_target not in ['tab-silent', 'tab-bg-silent']
+
+    # Otherwise, or if no window was found, create a new one
+    if window is None:
         window = MainWindow()
         window.show()
-        win_id = window.win_id
-        window_to_raise = window
-    else:
-        try:
-            window = objreg.last_window()
-        except objreg.NoWindow:
-            # There is no window left, so we open a new one
-            window = MainWindow()
-            window.show()
-            win_id = window.win_id
-            window_to_raise = window
-        win_id = window.win_id
-        if open_target not in ['tab-silent', 'tab-bg-silent']:
-            window_to_raise = window
-    if window_to_raise is not None:
-        window_to_raise.setWindowState(
-            window.windowState() & ~Qt.WindowMinimized | Qt.WindowActive)
-        window_to_raise.raise_()
-        window_to_raise.activateWindow()
-        QApplication.instance().alert(window_to_raise)
-    return win_id
+        raise_window = True
+
+    if raise_window:
+        window.setWindowState(window.windowState() & ~Qt.WindowMinimized)
+        window.setWindowState(window.windowState() | Qt.WindowActive)
+        window.raise_()
+        window.activateWindow()
+        QApplication.instance().alert(window)
+
+    return window.win_id
+
+
+def get_target_window():
+    """Get the target window for new tabs, or None if none exist."""
+    try:
+        win_mode = config.get('general', 'new-instance-open-target.window')
+        if win_mode == 'last-focused':
+            return objreg.last_focused_window()
+        elif win_mode == 'first-opened':
+            return objreg.window_by_index(0)
+        elif win_mode == 'last-opened':
+            return objreg.window_by_index(-1)
+        elif win_mode == 'last-visible':
+            return objreg.last_visible_window()
+        else:
+            raise ValueError("Invalid win_mode {}".format(win_mode))
+    except objreg.NoWindow:
+        return None
 
 
 class MainWindow(QWidget):
@@ -101,6 +126,7 @@ class MainWindow(QWidget):
         _downloadview: The DownloadView widget.
         _vbox: The main QVBoxLayout.
         _commandrunner: The main CommandRunner instance.
+        _overlays: Widgets shown as overlay for the current webpage.
     """
 
     def __init__(self, geometry=None, parent=None):
@@ -113,6 +139,7 @@ class MainWindow(QWidget):
         super().__init__(parent)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self._commandrunner = None
+        self._overlays = []
         self.win_id = next(win_id_gen)
         self.registry = objreg.ObjectRegistry()
         objreg.window_registry[self.win_id] = self
@@ -131,23 +158,13 @@ class MainWindow(QWidget):
         self._vbox.setContentsMargins(0, 0, 0, 0)
         self._vbox.setSpacing(0)
 
-        log.init.debug("Initializing downloads...")
-        download_manager = downloads.DownloadManager(self.win_id, self)
-        objreg.register('download-manager', download_manager, scope='window',
-                        window=self.win_id)
-
+        self._init_downloadmanager()
         self._downloadview = downloadview.DownloadView(self.win_id)
 
         self.tabbed_browser = tabbedbrowser.TabbedBrowser(self.win_id)
         objreg.register('tabbed-browser', self.tabbed_browser, scope='window',
                         window=self.win_id)
-        dispatcher = commands.CommandDispatcher(self.win_id,
-                                                self.tabbed_browser)
-        objreg.register('command-dispatcher', dispatcher, scope='window',
-                        window=self.win_id)
-        self.tabbed_browser.destroyed.connect(
-            functools.partial(objreg.delete, 'command-dispatcher',
-                              scope='window', window=self.win_id))
+        self._init_command_dispatcher()
 
         # We need to set an explicit parent for StatusBar because it does some
         # show/hide magic immediately which would mean it'd show up as a
@@ -157,15 +174,26 @@ class MainWindow(QWidget):
         self._add_widgets()
         self._downloadview.show()
 
-        self._completion = completionwidget.CompletionView(self.win_id, self)
+        self._init_completion()
+
+        log.init.debug("Initializing modes...")
+        modeman.init(self.win_id, self)
 
         self._commandrunner = runners.CommandRunner(self.win_id,
                                                     partial_match=True)
 
         self._keyhint = keyhintwidget.KeyHintView(self.win_id, self)
+        self._add_overlay(self._keyhint, self._keyhint.update_geometry)
+        self._messageview = messageview.MessageView(parent=self)
+        self._add_overlay(self._messageview, self._messageview.update_geometry)
 
-        log.init.debug("Initializing modes...")
-        modeman.init(self.win_id, self)
+        self._prompt_container = prompt.PromptContainer(self.win_id, self)
+        self._add_overlay(self._prompt_container,
+                          self._prompt_container.update_geometry,
+                          centered=True, padding=10)
+        objreg.register('prompt-container', self._prompt_container,
+                        scope='window', window=self.win_id)
+        self._prompt_container.hide()
 
         if geometry is not None:
             self._load_geometry(geometry)
@@ -181,14 +209,90 @@ class MainWindow(QWidget):
         # When we're here the statusbar might not even really exist yet, so
         # resizing will fail. Therefore, we use singleShot QTimers to make sure
         # we defer this until everything else is initialized.
-        QTimer.singleShot(0, self._connect_resize_completion)
-        QTimer.singleShot(0, self._connect_resize_keyhint)
+        QTimer.singleShot(0, self._connect_overlay_signals)
         objreg.get('config').changed.connect(self.on_config_changed)
 
-        if config.get('ui', 'hide-mouse-cursor'):
-            self.setCursor(Qt.BlankCursor)
-
         objreg.get("app").new_window.emit(self)
+
+    def _add_overlay(self, widget, signal, *, centered=False, padding=0):
+        self._overlays.append((widget, signal, centered, padding))
+
+    def _update_overlay_geometries(self):
+        """Update the size/position of all overlays."""
+        for w, _signal, centered, padding in self._overlays:
+            self._update_overlay_geometry(w, centered, padding)
+
+    def _update_overlay_geometry(self, widget, centered, padding):
+        """Reposition/resize the given overlay."""
+        if not widget.isVisible():
+            return
+
+        size_hint = widget.sizeHint()
+        if widget.sizePolicy().horizontalPolicy() == QSizePolicy.Expanding:
+            width = self.width() - 2 * padding
+            left = padding
+        else:
+            width = min(size_hint.width(), self.width() - 2 * padding)
+            left = (self.width() - width) / 2 if centered else 0
+
+        height_padding = 20
+        status_position = config.get('ui', 'status-position')
+        if status_position == 'bottom':
+            top = self.height() - self.status.height() - size_hint.height()
+            top = qtutils.check_overflow(top, 'int', fatal=False)
+            topleft = QPoint(left, max(height_padding, top))
+            bottomright = QPoint(left + width, self.status.geometry().top())
+        elif status_position == 'top':
+            topleft = QPoint(left, self.status.geometry().bottom())
+            bottom = self.status.height() + size_hint.height()
+            bottom = qtutils.check_overflow(bottom, 'int', fatal=False)
+            bottomright = QPoint(left + width,
+                                 min(self.height() - height_padding, bottom))
+        else:
+            raise ValueError("Invalid position {}!".format(status_position))
+
+        rect = QRect(topleft, bottomright)
+        log.misc.debug('new geometry for {!r}: {}'.format(widget, rect))
+        if rect.isValid():
+            widget.setGeometry(rect)
+
+    def _init_downloadmanager(self):
+        log.init.debug("Initializing downloads...")
+        qtnetwork_download_manager = qtnetworkdownloads.DownloadManager(
+            self.win_id, self)
+        objreg.register('qtnetwork-download-manager',
+                        qtnetwork_download_manager,
+                        scope='window', window=self.win_id)
+
+        try:
+            webengine_download_manager = objreg.get(
+                'webengine-download-manager')
+        except KeyError:
+            webengine_download_manager = None
+
+        download_model = downloads.DownloadModel(qtnetwork_download_manager,
+                                                 webengine_download_manager)
+        objreg.register('download-model', download_model, scope='window',
+                        window=self.win_id)
+
+    def _init_completion(self):
+        self._completion = completionwidget.CompletionView(self.win_id, self)
+        cmd = objreg.get('status-command', scope='window', window=self.win_id)
+        completer_obj = completer.Completer(cmd, self.win_id, self._completion)
+        self._completion.selection_changed.connect(
+            completer_obj.on_selection_changed)
+        objreg.register('completion', self._completion, scope='window',
+                        window=self.win_id)
+        self._add_overlay(self._completion, self._completion.update_geometry)
+
+    def _init_command_dispatcher(self):
+        dispatcher = commands.CommandDispatcher(self.win_id,
+                                                self.tabbed_browser)
+        objreg.register('command-dispatcher', dispatcher, scope='window',
+                        window=self.win_id)
+        self.tabbed_browser.destroyed.connect(
+            functools.partial(objreg.delete, 'command-dispatcher',
+                              scope='window', window=self.win_id))
 
     def __repr__(self):
         return utils.get_repr(self)
@@ -196,15 +300,15 @@ class MainWindow(QWidget):
     @pyqtSlot(str, str)
     def on_config_changed(self, section, option):
         """Resize the completion if related config options changed."""
-        if section == 'completion' and option in ['height', 'shrink']:
-            self.resize_completion()
-        elif section == 'ui' and option == 'statusbar-padding':
-            self.resize_completion()
-        elif section == 'ui' and option == 'downloads-position':
+        if section != 'ui':
+            return
+        if option == 'statusbar-padding':
+            self._update_overlay_geometries()
+        elif option == 'downloads-position':
             self._add_widgets()
-        elif section == 'ui' and option == 'status-position':
+        elif option == 'status-position':
             self._add_widgets()
-            self.resize_completion()
+            self._update_overlay_geometries()
 
     def _add_widgets(self):
         """Add or readd all widgets to the VBox."""
@@ -259,21 +363,19 @@ class MainWindow(QWidget):
 
         If loading fails, loads default geometry.
         """
-        log.init.debug("Loading mainwindow from {}".format(geom))
+        log.init.debug("Loading mainwindow from {!r}".format(geom))
         ok = self.restoreGeometry(geom)
         if not ok:
             log.init.warning("Error while loading geometry.")
             self._set_default_geometry()
 
-    def _connect_resize_completion(self):
-        """Connect the resize_completion signal and resize it once."""
-        self._completion.resize_completion.connect(self.resize_completion)
-        self.resize_completion()
-
-    def _connect_resize_keyhint(self):
-        """Connect the reposition_keyhint signal and resize it once."""
-        self._keyhint.reposition_keyhint.connect(self.reposition_keyhint)
-        self.reposition_keyhint()
+    def _connect_overlay_signals(self):
+        """Connect the resize signal and resize everything once."""
+        for widget, signal, centered, padding in self._overlays:
+            signal.connect(
+                functools.partial(self._update_overlay_geometry, widget,
+                                  centered, padding))
+            self._update_overlay_geometry(widget, centered, padding)
 
     def _set_default_geometry(self):
         """Set some sensible default geometry."""
@@ -294,7 +396,6 @@ class MainWindow(QWidget):
         cmd = self._get_object('status-command')
         message_bridge = self._get_object('message-bridge')
         mode_manager = self._get_object('mode-manager')
-        prompter = self._get_object('prompter')
 
         # misc
         self.tabbed_browser.close_window.connect(self.close)
@@ -304,7 +405,7 @@ class MainWindow(QWidget):
         mode_manager.entered.connect(status.on_mode_entered)
         mode_manager.left.connect(status.on_mode_left)
         mode_manager.left.connect(cmd.on_mode_left)
-        mode_manager.left.connect(prompter.on_mode_left)
+        mode_manager.left.connect(message.global_bridge.mode_left)
 
         # commands
         keyparsers[usertypes.KeyMode.normal].keystring_updated.connect(
@@ -322,19 +423,13 @@ class MainWindow(QWidget):
             key_config.changed.connect(obj.on_keyconfig_changed)
 
         # messages
-        message_bridge.s_error.connect(status.disp_error)
-        message_bridge.s_warning.connect(status.disp_warning)
-        message_bridge.s_info.connect(status.disp_temp_text)
+        message.global_bridge.show_message.connect(
+            self._messageview.show_message)
+
         message_bridge.s_set_text.connect(status.set_text)
         message_bridge.s_maybe_reset_text.connect(status.txt.maybe_reset_text)
-        message_bridge.s_set_cmd_text.connect(cmd.set_cmd_text)
-        message_bridge.s_question.connect(prompter.ask_question,
-                                          Qt.DirectConnection)
 
         # statusbar
-        # FIXME some of these probably only should be triggered on mainframe
-        # loadStarted.
-        # https://github.com/The-Compiler/qutebrowser/issues/112
         tabs.current_tab_changed.connect(status.prog.on_tab_changed)
         tabs.cur_progress.connect(status.prog.setValue)
         tabs.cur_load_finished.connect(status.prog.hide)
@@ -355,65 +450,6 @@ class MainWindow(QWidget):
         cmd.clear_completion_selection.connect(
             completion_obj.on_clear_completion_selection)
         cmd.hide_completion.connect(completion_obj.hide)
-
-    @pyqtSlot()
-    def resize_completion(self):
-        """Adjust completion according to config."""
-        if not self._completion.isVisible():
-            # It doesn't make sense to resize the completion as long as it's
-            # not shown anyways.
-            return
-        # Get the configured height/percentage.
-        confheight = str(config.get('completion', 'height'))
-        if confheight.endswith('%'):
-            perc = int(confheight.rstrip('%'))
-            height = self.height() * perc / 100
-        else:
-            height = int(confheight)
-        # Shrink to content size if needed and shrinking is enabled
-        if config.get('completion', 'shrink'):
-            contents_height = (
-                self._completion.viewportSizeHint().height() +
-                self._completion.horizontalScrollBar().sizeHint().height())
-            if contents_height <= height:
-                height = contents_height
-        else:
-            contents_height = -1
-        status_position = config.get('ui', 'status-position')
-        if status_position == 'bottom':
-            top = self.height() - self.status.height() - height
-            top = qtutils.check_overflow(top, 'int', fatal=False)
-            topleft = QPoint(0, top)
-            bottomright = self.status.geometry().topRight()
-        elif status_position == 'top':
-            topleft = self.status.geometry().bottomLeft()
-            bottom = self.status.height() + height
-            bottom = qtutils.check_overflow(bottom, 'int', fatal=False)
-            bottomright = QPoint(self.width(), bottom)
-        else:
-            raise ValueError("Invalid position {}!".format(status_position))
-        rect = QRect(topleft, bottomright)
-        log.misc.debug('completion rect: {}'.format(rect))
-        if rect.isValid():
-            self._completion.setGeometry(rect)
-
-    @pyqtSlot()
-    def reposition_keyhint(self):
-        """Adjust keyhint according to config."""
-        if not self._keyhint.isVisible():
-            return
-        # Shrink the window to the shown text and place it at the bottom left
-        width = self._keyhint.width()
-        height = self._keyhint.height()
-        topleft_y = self.height() - self.status.height() - height
-        topleft_y = qtutils.check_overflow(topleft_y, 'int', fatal=False)
-        topleft = QPoint(0, topleft_y)
-        bottomright = (self.status.geometry().topLeft() +
-                       QPoint(width, 0))
-        rect = QRect(topleft, bottomright)
-        log.misc.debug('keyhint rect: {}'.format(rect))
-        if rect.isValid():
-            self._keyhint.setGeometry(rect)
 
     @cmdutils.register(instance='main-window', scope='window')
     @pyqtSlot()
@@ -441,13 +477,27 @@ class MainWindow(QWidget):
             e: The QResizeEvent
         """
         super().resizeEvent(e)
-        self.resize_completion()
-        self.reposition_keyhint()
+        self._update_overlay_geometries()
         self._downloadview.updateGeometry()
         self.tabbed_browser.tabBar().refresh()
 
+    def showEvent(self, e):
+        """Extend showEvent to register us as the last-visible-main-window.
+
+        Args:
+            e: The QShowEvent
+        """
+        super().showEvent(e)
+        objreg.register('last-visible-main-window', self, update=True)
+
     def _do_close(self):
         """Helper function for closeEvent."""
+        try:
+            last_visible = objreg.get('last-visible-main-window')
+            if self is last_visible:
+                objreg.delete('last-visible-main-window')
+        except KeyError:
+            pass
         objreg.get('session-manager').save_last_window_session()
         self._save_geometry()
         log.destroy.debug("Closing window {}".format(self.win_id))
@@ -460,9 +510,9 @@ class MainWindow(QWidget):
             return
         confirm_quit = config.get('ui', 'confirm-quit')
         tab_count = self.tabbed_browser.count()
-        download_manager = objreg.get('download-manager', scope='window',
-                                      window=self.win_id)
-        download_count = download_manager.running_downloads()
+        download_model = objreg.get('download-model', scope='window',
+                                    window=self.win_id)
+        download_count = download_model.running_downloads()
         quit_texts = []
         # Ask if multiple-tabs are open
         if 'multiple-tabs' in confirm_quit and tab_count > 1:
@@ -471,14 +521,21 @@ class MainWindow(QWidget):
         # Ask if multiple downloads running
         if 'downloads' in confirm_quit and download_count > 0:
             quit_texts.append("{} {} running.".format(
-                tab_count,
-                "download is" if tab_count == 1 else "downloads are"))
+                download_count,
+                "download is" if download_count == 1 else "downloads are"))
         # Process all quit messages that user must confirm
         if quit_texts or 'always' in confirm_quit:
-            text = '\n'.join(['Really quit?'] + quit_texts)
-            confirmed = message.ask(self.win_id, text,
-                                    usertypes.PromptMode.yesno,
+            msg = jinja2.Template("""
+                <ul>
+                {% for text in quit_texts %}
+                   <li>{{text}}</li>
+                {% endfor %}
+                </ul>
+            """.strip()).render(quit_texts=quit_texts)
+            confirmed = message.ask('Really quit?', msg,
+                                    mode=usertypes.PromptMode.yesno,
                                     default=True)
+
             # Stop asking if the user cancels
             if not confirmed:
                 log.destroy.debug("Cancelling closing of window {}".format(

@@ -33,19 +33,41 @@ def wait_ssl_page_finished_loading(quteproc, ssl_server):
                                     load_status='warn')
 
 
-@bdd.when("I click the button")
-def click_button(quteproc):
-    quteproc.send_cmd(':hint')
-    quteproc.send_cmd(':follow-hint a')
-
-
 @bdd.when("I wait for a prompt")
 def wait_for_prompt(quteproc):
-    quteproc.wait_for(message='Entering mode KeyMode.* (reason: question '
-                              'asked)')
+    quteproc.wait_for(message='Asking question *')
 
 
 @bdd.then("no prompt should be shown")
 def no_prompt_shown(quteproc):
     quteproc.ensure_not_logged(message='Entering mode KeyMode.* (reason: '
                                        'question asked)')
+
+
+@bdd.then("a SSL error page should be shown")
+def ssl_error_page(request, quteproc):
+    if not request.config.webengine:
+        line = quteproc.wait_for(message='Error while loading *: SSL '
+                                 'handshake failed')
+        line.expected = True
+    quteproc.wait_for(message="Changing title for idx * to 'Error "
+                      "loading page: *'")
+    content = quteproc.get_content().strip()
+    assert "Unable to load page" in content
+
+
+class AbstractCertificateErrorWrapper:
+
+    """A wrapper over an SSL/certificate error."""
+
+    def __init__(self, error):
+        self._error = error
+
+    def __str__(self):
+        raise NotImplementedError
+
+    def __repr__(self):
+        raise NotImplementedError
+
+    def is_overridable(self):
+        raise NotImplementedError

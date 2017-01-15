@@ -23,8 +23,8 @@ from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QSize
 from PyQt5.QtWidgets import QSizePolicy
 
 from qutebrowser.keyinput import modeman, modeparsers
-from qutebrowser.commands import cmdexc, cmdutils, runners
-from qutebrowser.misc import cmdhistory, split
+from qutebrowser.commands import cmdexc, cmdutils
+from qutebrowser.misc import cmdhistory
 from qutebrowser.misc import miscwidgets as misc
 from qutebrowser.utils import usertypes, log, objreg
 
@@ -77,7 +77,6 @@ class Command(misc.MinimalLineEditMixin, misc.CommandLineEdit):
         else:
             return ''
 
-    @pyqtSlot(str)
     def set_cmd_text(self, text):
         """Preset the statusbar to some text.
 
@@ -95,9 +94,6 @@ class Command(misc.MinimalLineEditMixin, misc.CommandLineEdit):
     def set_cmd_text_command(self, text, space=False, append=False):
         """Preset the statusbar to some text.
 
-        You can use the `{url}` and `{url:pretty}` variables here which will
-        get replaced by the encoded/decoded URL.
-
         //
 
         Wrapper for set_cmd_text to check the arguments and allow multiple
@@ -108,10 +104,6 @@ class Command(misc.MinimalLineEditMixin, misc.CommandLineEdit):
             space: If given, a space is added to the end.
             append: If given, the text is appended to the current text.
         """
-        args = split.simple_split(text)
-        args = runners.replace_variables(self._win_id, args)
-        text = ' '.join(args)
-
         if space:
             text += ' '
         if append:

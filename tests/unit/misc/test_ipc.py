@@ -26,12 +26,10 @@ import collections
 import logging
 import json
 import hashlib
-import tempfile
 import subprocess
 from unittest import mock
 
 import pytest
-import py.path  # pylint: disable=no-name-in-module
 from PyQt5.QtCore import pyqtSignal, QObject
 from PyQt5.QtNetwork import QLocalServer, QLocalSocket, QAbstractSocket
 from PyQt5.QtTest import QSignalSpy
@@ -45,13 +43,7 @@ from helpers import stubs
 pytestmark = pytest.mark.usefixtures('qapp')
 
 
-@pytest.yield_fixture()
-def short_tmpdir():
-    with tempfile.TemporaryDirectory() as tdir:
-        yield py.path.local(tdir)  # pylint: disable=no-member
-
-
-@pytest.yield_fixture(autouse=True)
+@pytest.fixture(autouse=True)
 def shutdown_server():
     """If ipc.send_or_listen was called, make sure to shut server down."""
     yield
@@ -63,7 +55,7 @@ def shutdown_server():
         server.shutdown()
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def ipc_server(qapp, qtbot):
     server = ipc.IPCServer('qute-test')
     yield server
@@ -77,7 +69,7 @@ def ipc_server(qapp, qtbot):
         pass
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def qlocalserver(qapp):
     server = QLocalServer()
     yield server
@@ -85,7 +77,7 @@ def qlocalserver(qapp):
     server.deleteLater()
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def qlocalsocket(qapp):
     socket = QLocalSocket()
     yield socket
@@ -447,7 +439,7 @@ class TestHandleConnection:
         assert "We can read a line immediately." in all_msgs
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def connected_socket(qtbot, qlocalsocket, ipc_server):
     if sys.platform == 'darwin':
         pytest.skip("Skipping connected_socket test - "
@@ -494,7 +486,7 @@ def test_invalid_data(qtbot, ipc_server, connected_socket, caplog, data, msg):
     signals = [ipc_server.got_invalid_data, connected_socket.disconnected]
     with caplog.at_level(logging.ERROR):
         with qtbot.assertNotEmitted(ipc_server.got_args):
-            with qtbot.waitSignals(signals):
+            with qtbot.waitSignals(signals, order='strict'):
                 connected_socket.write(data)
 
     messages = [r.message for r in caplog.records]
@@ -512,7 +504,8 @@ def test_multiline(qtbot, ipc_server, connected_socket):
                 version=ipc.PROTOCOL_VERSION))
 
     with qtbot.assertNotEmitted(ipc_server.got_invalid_data):
-        with qtbot.waitSignals([ipc_server.got_args, ipc_server.got_args]):
+        with qtbot.waitSignals([ipc_server.got_args, ipc_server.got_args],
+                               order='strict'):
             connected_socket.write(data.encode('utf-8'))
 
     assert len(spy) == 2
@@ -653,7 +646,7 @@ class TestSendOrListen:
             setattr(m, attr, getattr(QLocalSocket, attr))
         return m
 
-    @pytest.yield_fixture
+    @pytest.fixture
     def legacy_server(self, args):
         legacy_name = ipc._get_socketname(args.basedir, legacy=True)
         legacy_server = ipc.IPCServer(legacy_name)
