@@ -15,7 +15,8 @@ Vcs-Git: https://github.com/mati75/qutebrowser
 Package: qutebrowser
 Architecture: all
 Depends: ${misc:Depends}, ${python3:Depends}, desktop-file-utils, hicolor-icon-theme,
- python3-pyqt5, python3-pyqt5.qtwebkit
+ python3-pyqt5, python3-pyqt5.qtwebkit [!amd64 !i386], python3-pyqt5.qtwebchannel,
+ python3-pyqt5.qtwebengine [i386 amd64]
 Recommends: python3-colorama, python3-cssutils
 Description: Keyboard-driven, vim-like browser based on PyQt5 and QtWebKit
  qutebrowser is a keyboard-focused browser with a minimal GUI. It iss based
