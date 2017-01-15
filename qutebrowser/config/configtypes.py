@@ -22,7 +22,6 @@
 import re
 import json
 import shlex
-import base64
 import codecs
 import os.path
 import itertools
@@ -32,7 +31,6 @@ import datetime
 
 from PyQt5.QtCore import QUrl, Qt
 from PyQt5.QtGui import QColor, QFont
-from PyQt5.QtNetwork import QNetworkProxy
 from PyQt5.QtWidgets import QTabWidget, QTabBar
 
 from qutebrowser.commands import cmdutils
@@ -61,7 +59,7 @@ def _validate_regex(pattern, flags):
         except re.error as e:
             raise configexc.ValidationError(
                 pattern, "must be a valid regex - " + str(e))
-        except RuntimeError:
+        except RuntimeError:  # pragma: no cover
             raise configexc.ValidationError(
                 pattern, "must be a valid regex - recursion depth exceeded")
 
@@ -107,6 +105,10 @@ class ValidValues:
         return utils.get_repr(self, values=self.values,
                               descriptions=self.descriptions)
 
+    def __eq__(self, other):
+        return (self.values == other.values and
+                self.descriptions == other.descriptions)
+
 
 class BaseType:
 
@@ -123,6 +125,14 @@ class BaseType:
     def __init__(self, none_ok=False):
         self.none_ok = none_ok
         self.valid_values = None
+
+    def get_name(self):
+        """Get a name for the type for documentation."""
+        return self.__class__.__name__
+
+    def get_valid_values(self):
+        """Get the type's valid values for documentation."""
+        return self.valid_values
 
     def _basic_validation(self, value):
         """Do some basic validation for the value (empty, non-printable chars).
@@ -303,23 +313,39 @@ class List(BaseType):
 
     """Base class for a (string-)list setting."""
 
-    def __init__(self, none_ok=False, valid_values=None):
+    _show_inner_type = True
+
+    def __init__(self, inner_type, none_ok=False, length=None):
         super().__init__(none_ok)
-        self.valid_values = valid_values
+        self.inner_type = inner_type
+        self.length = length
+
+    def get_name(self):
+        name = super().get_name()
+        if self._show_inner_type:
+            name += " of " + self.inner_type.get_name()
+        return name
+
+    def get_valid_values(self):
+        return self.inner_type.get_valid_values()
 
     def transform(self, value):
         if not value:
             return None
         else:
-            return [v if v else None for v in value.split(',')]
+            return [self.inner_type.transform(v.strip())
+                    for v in value.split(',')]
 
     def validate(self, value):
         self._basic_validation(value)
         if not value:
             return
-        vals = self.transform(value)
-        if None in vals:
-            raise configexc.ValidationError(value, "items may not be empty!")
+        vals = value.split(',')
+        if self.length is not None and len(vals) != self.length:
+            raise configexc.ValidationError(value, "Exactly {} values need to "
+                                            "be set!".format(self.length))
+        for val in vals:
+            self.inner_type.validate(val.strip())
 
 
 class FlagList(List):
@@ -332,41 +358,40 @@ class FlagList(List):
 
     combinable_values = None
 
+    _show_inner_type = False
+
+    def __init__(self, none_ok=False, valid_values=None):
+        super().__init__(BaseType(), none_ok)
+        self.inner_type.valid_values = valid_values
+
     def validate(self, value):
-        self._basic_validation(value)
+        if self.inner_type.valid_values is not None:
+            super().validate(value)
+        else:
+            self._basic_validation(value)
         if not value:
             return
-
-        vals = self.transform(value)
-        if None in vals and not self.none_ok:
-            raise configexc.ValidationError(
-                value, "May not contain empty values!")
+        vals = super().transform(value)
 
         # Check for duplicate values
         if len(set(vals)) != len(vals):
             raise configexc.ValidationError(
                 value, "List contains duplicate values!")
 
-        # Check if each value is valid, ignores None values
-        set_vals = set(val for val in vals if val)
-        if (self.valid_values is not None and
-                not set_vals.issubset(set(self.valid_values))):
-            raise configexc.ValidationError(
-                value, "List contains invalid values!")
-
     def complete(self):
-        if self.valid_values is None:
+        valid_values = self.inner_type.valid_values
+        if valid_values is None:
             return None
 
         out = []
         # Single value completions
-        for value in self.valid_values:
-            desc = self.valid_values.descriptions.get(value, "")
+        for value in valid_values:
+            desc = valid_values.descriptions.get(value, "")
             out.append((value, desc))
 
         combinables = self.combinable_values
         if combinables is None:
-            combinables = list(self.valid_values)
+            combinables = list(valid_values)
         # Generate combinations of each possible value combination
         for size in range(2, len(combinables) + 1):
             for combination in itertools.combinations(combinables, size):
@@ -456,29 +481,6 @@ class Int(BaseType):
                                             "smaller!".format(self.maxval))
 
 
-class IntList(List):
-
-    """Base class for an int-list setting."""
-
-    def transform(self, value):
-        if not value:
-            return None
-        vals = super().transform(value)
-        return [int(v) if v is not None else None for v in vals]
-
-    def validate(self, value):
-        self._basic_validation(value)
-        if not value:
-            return
-        try:
-            vals = self.transform(value)
-        except ValueError:
-            raise configexc.ValidationError(value, "must be a list of "
-                                            "integers!")
-        if None in vals and not self.none_ok:
-            raise configexc.ValidationError(value, "items may not be empty!")
-
-
 class Float(BaseType):
 
     """Base class for a float setting.
@@ -557,50 +559,6 @@ class Perc(BaseType):
         if self.maxval is not None and intval > self.maxval:
             raise configexc.ValidationError(value, "must be {}% or "
                                             "less!".format(self.maxval))
-
-
-class PercList(List):
-
-    """Base class for a list of percentages.
-
-    Attributes:
-        minval: Minimum value (inclusive).
-        maxval: Maximum value (inclusive).
-    """
-
-    def __init__(self, minval=None, maxval=None, none_ok=False):
-        super().__init__(none_ok)
-        if maxval is not None and minval is not None and maxval < minval:
-            raise ValueError("minval ({}) needs to be <= maxval ({})!".format(
-                minval, maxval))
-        self.minval = minval
-        self.maxval = maxval
-
-    def transform(self, value):
-        if not value:
-            return None
-        vals = super().transform(value)
-        return [int(v[:-1]) if v is not None else None for v in vals]
-
-    def validate(self, value):
-        self._basic_validation(value)
-        if not value:
-            return
-        vals = super().transform(value)
-        perctype = Perc(minval=self.minval, maxval=self.maxval)
-        try:
-            for val in vals:
-                if val is None:
-                    if self.none_ok:
-                        continue
-                    else:
-                        raise configexc.ValidationError(value, "items may not "
-                                                        "be empty!")
-                else:
-                    perctype.validate(val)
-        except configexc.ValidationError:
-            raise configexc.ValidationError(value, "must be a list of "
-                                            "percentages!")
 
 
 class PercOrInt(BaseType):
@@ -885,36 +843,6 @@ class Regex(BaseType):
             return re.compile(value, self.flags)
 
 
-class RegexList(List):
-
-    """A list of regexes."""
-
-    def __init__(self, flags=0, none_ok=False):
-        super().__init__(none_ok)
-        self.flags = flags
-
-    def transform(self, value):
-        if not value:
-            return None
-        vals = super().transform(value)
-        return [re.compile(v, self.flags) if v is not None else None
-                for v in vals]
-
-    def validate(self, value):
-        self._basic_validation(value)
-        if not value:
-            return
-        vals = super().transform(value)
-
-        for val in vals:
-            if val is None:
-                if not self.none_ok:
-                    raise configexc.ValidationError(
-                        value, "items may not be empty!")
-            else:
-                _validate_regex(val, self.flags)
-
-
 class File(BaseType):
 
     """A file on the local filesystem."""
@@ -929,9 +857,7 @@ class File(BaseType):
         value = os.path.expanduser(value)
         value = os.path.expandvars(value)
         if not os.path.isabs(value):
-            cfgdir = standarddir.config()
-            assert cfgdir is not None
-            value = os.path.join(cfgdir, value)
+            value = os.path.join(standarddir.config(), value)
         return value
 
     def validate(self, value):
@@ -942,12 +868,7 @@ class File(BaseType):
         value = os.path.expandvars(value)
         try:
             if not os.path.isabs(value):
-                cfgdir = standarddir.config()
-                if cfgdir is None:
-                    raise configexc.ValidationError(
-                        value, "must be an absolute path when not using a "
-                        "config directory!")
-                value = os.path.join(cfgdir, value)
+                value = os.path.join(standarddir.config(), value)
                 not_isfile_message = ("must be a valid path relative to the "
                                       "config directory!")
             else:
@@ -1061,39 +982,6 @@ class WebKitBytes(BaseType):
         return int(val) * multiplicator
 
 
-class WebKitBytesList(List):
-
-    """A size with an optional suffix.
-
-    Attributes:
-        length: The length of the list.
-        bytestype: The webkit bytes type.
-    """
-
-    def __init__(self, maxsize=None, length=None, none_ok=False):
-        super().__init__(none_ok)
-        self.length = length
-        self.bytestype = WebKitBytes(maxsize, none_ok=none_ok)
-
-    def transform(self, value):
-        if value == '':
-            return None
-        else:
-            vals = super().transform(value)
-            return [self.bytestype.transform(val) for val in vals]
-
-    def validate(self, value):
-        self._basic_validation(value)
-        if not value:
-            return
-        vals = super().transform(value)
-        for val in vals:
-            self.bytestype.validate(val)
-        if self.length is not None and len(vals) != self.length:
-            raise configexc.ValidationError(value, "exactly {} values need to "
-                                            "be set!".format(self.length))
-
-
 class ShellCommand(BaseType):
 
     """A shellcommand which is split via shlex.
@@ -1129,12 +1017,6 @@ class Proxy(BaseType):
 
     """A proxy URL or special value."""
 
-    PROXY_TYPES = {
-        'http': QNetworkProxy.HttpProxy,
-        'socks': QNetworkProxy.Socks5Proxy,
-        'socks5': QNetworkProxy.Socks5Proxy,
-    }
-
     def __init__(self, none_ok=False):
         super().__init__(none_ok)
         self.valid_values = ValidValues(
@@ -1142,19 +1024,17 @@ class Proxy(BaseType):
             ('none', "Don't use any proxy"))
 
     def validate(self, value):
+        from qutebrowser.utils import urlutils
         self._basic_validation(value)
         if not value:
             return
         elif value in self.valid_values:
             return
-        url = QUrl(value)
-        if not url.isValid():
-            raise configexc.ValidationError(
-                value, "invalid url, {}".format(url.errorString()))
-        elif url.scheme() not in self.PROXY_TYPES:
-            raise configexc.ValidationError(value, "must be a proxy URL "
-                                            "(http://... or socks://...) or "
-                                            "system/none!")
+
+        try:
+            self.transform(value)
+        except (urlutils.InvalidUrlError, urlutils.InvalidProxyTypeError) as e:
+            raise configexc.ValidationError(value, e)
 
     def complete(self):
         out = []
@@ -1164,25 +1044,21 @@ class Proxy(BaseType):
         out.append(('socks://', 'SOCKS proxy URL'))
         out.append(('socks://localhost:9050/', 'Tor via SOCKS'))
         out.append(('http://localhost:8080/', 'Local HTTP proxy'))
+        out.append(('pac+https://example.com/proxy.pac', 'Proxy autoconfiguration file URL'))
         return out
 
     def transform(self, value):
+        from qutebrowser.utils import urlutils
         if not value:
             return None
         elif value == 'system':
             return SYSTEM_PROXY
-        elif value == 'none':
-            return QNetworkProxy(QNetworkProxy.NoProxy)
-        url = QUrl(value)
-        typ = self.PROXY_TYPES[url.scheme()]
-        proxy = QNetworkProxy(typ, url.host())
-        if url.port() != -1:
-            proxy.setPort(url.port())
-        if url.userName():
-            proxy.setUser(url.userName())
-        if url.password():
-            proxy.setPassword(url.password())
-        return proxy
+
+        if value == 'none':
+            url = QUrl('direct://')
+        else:
+            url = QUrl(value)
+        return urlutils.proxy_from_url(url)
 
 
 class SearchEngineName(BaseType):
@@ -1243,25 +1119,16 @@ PaddingValues = collections.namedtuple('PaddingValues', ['top', 'bottom',
                                                          'left', 'right'])
 
 
-class Padding(IntList):
+class Padding(List):
 
     """Setting for paddings around elements."""
 
-    def validate(self, value):
-        self._basic_validation(value)
-        if not value:
-            return
-        try:
-            vals = self.transform(value)
-        except (ValueError, TypeError):
-            raise configexc.ValidationError(value, "must be a list of 4 "
-                                            "integers!")
-        if None in vals and not self.none_ok:
-            raise configexc.ValidationError(value, "items may not be empty!")
-        elems = self.transform(value)
-        if any(e is not None and e < 0 for e in elems):
-            raise configexc.ValidationError(value, "Values need to be "
-                                            "positive!")
+    _show_inner_type = False
+
+    def __init__(self, none_ok=False, valid_values=None):
+        super().__init__(Int(minval=0, none_ok=none_ok),
+                         none_ok=none_ok, length=4)
+        self.inner_type.valid_values = valid_values
 
     def transform(self, value):
         elems = super().transform(value)
@@ -1282,48 +1149,6 @@ class Encoding(BaseType):
             codecs.lookup(value)
         except LookupError:
             raise configexc.ValidationError(value, "is not a valid encoding!")
-
-
-class UserStyleSheet(File):
-
-    """QWebSettings UserStyleSheet."""
-
-    def transform(self, value):
-        if not value:
-            return None
-
-        if standarddir.config() is None:
-            # We can't call super().transform() here as this counts on the
-            # validation previously ensuring that we don't have a relative path
-            # when starting with -c "".
-            path = None
-        else:
-            path = super().transform(value)
-
-        if path is not None and os.path.exists(path):
-            return QUrl.fromLocalFile(path)
-        else:
-            data = base64.b64encode(value.encode('utf-8')).decode('ascii')
-            return QUrl("data:text/css;charset=utf-8;base64,{}".format(data))
-
-    def validate(self, value):
-        self._basic_validation(value)
-        if not value:
-            return
-        value = os.path.expandvars(value)
-        value = os.path.expanduser(value)
-        try:
-            super().validate(value)
-        except configexc.ValidationError:
-            try:
-                if not os.path.isabs(value):
-                    # probably a CSS, so we don't handle it as filename.
-                    # FIXME We just try if it is encodable, maybe we should
-                    # validate CSS?
-                    # https://github.com/The-Compiler/qutebrowser/issues/115
-                    value.encode('utf-8')
-            except UnicodeEncodeError as e:
-                raise configexc.ValidationError(value, str(e))
 
 
 class AutoSearch(BaseType):
@@ -1401,29 +1226,24 @@ class VerticalPosition(BaseType):
         self.valid_values = ValidValues('top', 'bottom')
 
 
-class UrlList(List):
+class Url(BaseType):
 
-    """A list of URLs."""
+    """A URL."""
 
     def transform(self, value):
         if not value:
             return None
         else:
-            return [QUrl.fromUserInput(v) if v else None
-                    for v in value.split(',')]
+            return QUrl.fromUserInput(value)
 
     def validate(self, value):
         self._basic_validation(value)
         if not value:
             return
-        vals = self.transform(value)
-        for val in vals:
-            if val is None:
-                raise configexc.ValidationError(value, "values may not be "
-                                                "empty!")
-            elif not val.isValid():
-                raise configexc.ValidationError(value, "invalid URL - "
-                                                "{}".format(val.errorString()))
+        val = self.transform(value)
+        if not val.isValid():
+            raise configexc.ValidationError(value, "invalid URL - "
+                                            "{}".format(val.errorString()))
 
 
 class HeaderDict(BaseType):
@@ -1496,18 +1316,20 @@ class SelectOnRemove(MappingType):
     """Which tab to select when the focused tab is removed."""
 
     MAPPING = {
-        'left': QTabBar.SelectLeftTab,
-        'right': QTabBar.SelectRightTab,
-        'previous': QTabBar.SelectPreviousTab,
+        'prev': QTabBar.SelectLeftTab,
+        'next': QTabBar.SelectRightTab,
+        'last-used': QTabBar.SelectPreviousTab,
     }
 
     def __init__(self, none_ok=False):
         super().__init__(
             none_ok,
             valid_values=ValidValues(
-                ('left', "Select the tab on the left."),
-                ('right', "Select the tab on the right."),
-                ('previous', "Select the previously selected tab.")))
+                ('prev', "Select the tab which came before the closed one "
+                 "(left in horizontal, above in vertical)."),
+                ('next', "Select the tab which came after the closed one "
+                 "(right in horizontal, below in vertical)."),
+                ('last-used', "Select the previously selected tab.")))
 
 
 class ConfirmQuit(FlagList):
@@ -1519,7 +1341,8 @@ class ConfirmQuit(FlagList):
 
     def __init__(self, none_ok=False):
         super().__init__(none_ok)
-        self.valid_values = ValidValues(
+        self.inner_type.none_ok = none_ok
+        self.inner_type.valid_values = ValidValues(
             ('always', "Always show a confirmation."),
             ('multiple-tabs', "Show a confirmation if "
              "multiple tabs are opened."),
@@ -1550,10 +1373,10 @@ class NewTabPosition(BaseType):
     def __init__(self, none_ok=False):
         super().__init__(none_ok)
         self.valid_values = ValidValues(
-            ('left', "On the left of the current tab."),
-            ('right', "On the right of the current tab."),
-            ('first', "At the left end."),
-            ('last', "At the right end."))
+            ('prev', "Before the current tab."),
+            ('next', "After the current tab."),
+            ('first', "At the beginning."),
+            ('last', "At the end."))
 
 
 class IgnoreCase(Bool):
@@ -1590,6 +1413,11 @@ class UserAgent(BaseType):
 
     def validate(self, value):
         self._basic_validation(value)
+        try:
+            value.encode('ascii')
+        except UnicodeEncodeError as e:
+            msg = "User-Agent contains non-ascii characters: {}".format(e)
+            raise configexc.ValidationError(value, msg)
 
     # To update the following list of user agents, run the script 'ua_fetch.py'
     # Vim-protip: Place your cursor below this comment and run
@@ -1597,35 +1425,35 @@ class UserAgent(BaseType):
     def complete(self):
         """Complete a list of common user agents."""
         out = [
-            ('Mozilla/5.0 (Windows NT 6.1; WOW64; rv:41.0) Gecko/20100101 '
-             'Firefox/41.0',
-             "Firefox 41.0  Win7 64-bit"),
-            ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10.10; rv:41.0) '
-             'Gecko/20100101 Firefox/41.0',
-             "Firefox 41.0  MacOSX"),
-            ('Mozilla/5.0 (X11; Linux x86_64; rv:41.0) Gecko/20100101 '
-             'Firefox/41.0',
-             "Firefox 41.0  Linux"),
+            ('Mozilla/5.0 (Windows NT 6.1; WOW64; rv:47.0) Gecko/20100101 '
+             'Firefox/47.0',
+             "Firefox Generic Win7"),
+            ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10.11; rv:47.0) '
+             'Gecko/20100101 Firefox/47.0',
+             "Firefox Generic MacOSX"),
+            ('Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:47.0) Gecko/20100101 '
+             'Firefox/47.0',
+             "Firefox Generic Linux"),
 
-            ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_1) '
-             'AppleWebKit/601.2.7 (KHTML, like Gecko) Version/9.0.1 '
-             'Safari/601.2.7',
-             "Safari Generic  MacOSX"),
-            ('Mozilla/5.0 (iPad; CPU OS 9_1 like Mac OS X) '
+            ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_6) '
+             'AppleWebKit/601.7.7 (KHTML, like Gecko) Version/9.1.2 '
+             'Safari/601.7.7',
+             "Safari Generic MacOSX"),
+            ('Mozilla/5.0 (iPad; CPU OS 9_3_2 like Mac OS X) '
              'AppleWebKit/601.1.46 (KHTML, like Gecko) Version/9.0 '
-             'Mobile/13B143 Safari/601.1',
-             "Mobile Safari Generic  iOS"),
+             'Mobile/13F69 Safari/601.1',
+             "Mobile Safari 9.0 iOS"),
 
-            ('Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, '
-             'like Gecko) Chrome/46.0.2490.80 Safari/537.36',
-             "Chrome 46.0  Win7 64-bit"),
-            ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_5) '
-             'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 '
+            ('Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 '
+             '(KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36',
+             "Chrome Generic Win10"),
+            ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) '
+             'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 '
              'Safari/537.36',
-             "Chrome 46.0  MacOSX"),
-            ('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, '
-             'like Gecko) Chrome/46.0.2490.80 Safari/537.36',
-             "Chrome 46.0  Linux"),
+             "Chrome Generic MacOSX"),
+            ('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+             '(KHTML, like Gecko) Chrome/51.0.2704.106 Safari/537.36',
+             "Chrome Generic Linux"),
 
             ('Mozilla/5.0 (compatible; Googlebot/2.1; '
              '+http://www.google.com/bot.html',
@@ -1637,7 +1465,7 @@ class UserAgent(BaseType):
 
             ('Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like '
              'Gecko',
-             "IE 11.0 for Desktop  Win7 64-bit")
+             "IE 11.0 for Desktop Win7 64-bit")
         ]
         return out
 

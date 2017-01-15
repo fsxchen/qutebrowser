@@ -41,6 +41,7 @@ class TestTabWidget:
             'position': 0,
             'select-on-remove': 1,
             'show': 'always',
+            'show-favicons': True,
             'padding': configtypes.PaddingValues(0, 0, 5, 5),
             'indicator-width': 3,
             'indicator-padding': configtypes.PaddingValues(2, 2, 0, 4),
@@ -71,5 +72,6 @@ class TestTabWidget:
         icon = QIcon(pixmap)
         tab = fake_web_tab()
         widget.addTab(tab, icon, 'foobar')
-        widget.show()
-        qtbot.waitForWindowShown(widget)
+
+        with qtbot.waitExposed(widget):
+            widget.show()

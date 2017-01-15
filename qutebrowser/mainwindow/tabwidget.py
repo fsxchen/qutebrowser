@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import (QTabWidget, QTabBar, QSizePolicy, QCommonStyle,
                              QStyle, QStylePainter, QStyleOptionTab)
 from PyQt5.QtGui import QIcon, QPalette, QColor
 
-from qutebrowser.utils import qtutils, objreg, utils, usertypes
+from qutebrowser.utils import qtutils, objreg, utils, usertypes, log
 from qutebrowser.config import config
 
 
@@ -67,6 +67,9 @@ class TabWidget(QTabWidget):
     @config.change_filter('tabs')
     def init_config(self):
         """Initialize attributes based on the config."""
+        if self is None:  # pragma: no cover
+            # WORKAROUND for PyQt 5.2
+            return
         tabbar = self.tabBar()
         self.setMovable(config.get('tabs', 'movable'))
         self.setTabsClosable(False)
@@ -88,6 +91,10 @@ class TabWidget(QTabWidget):
         bar.set_tab_data(idx, 'indicator-color', color)
         bar.update(bar.tabRect(idx))
 
+    def tab_indicator_color(self, idx):
+        """Get the tab indicator color for the given index."""
+        return self.tabBar().tab_indicator_color(idx)
+
     def set_page_title(self, idx, title):
         """Set the tab title user data."""
         self.tabBar().set_tab_data(idx, 'page-title', title)
@@ -104,7 +111,8 @@ class TabWidget(QTabWidget):
         fields['index'] = idx + 1
 
         fmt = config.get('tabs', 'title-format')
-        self.tabBar().setTabText(idx, fmt.format(**fields))
+        title = '' if fmt is None else fmt.format(**fields)
+        self.tabBar().setTabText(idx, title)
 
     def get_tab_fields(self, idx):
         """Get the tab field data."""
@@ -116,6 +124,7 @@ class TabWidget(QTabWidget):
         fields['title'] = page_title
         fields['title_sep'] = ' - ' if page_title else ''
         fields['perc_raw'] = tab.progress()
+        fields['backend'] = objreg.get('args').backend
 
         if tab.load_status() == usertypes.LoadStatus.loading:
             fields['perc'] = '[{}%] '.format(tab.progress())
@@ -325,6 +334,13 @@ class TabBar(QTabBar):
             data = {}
         return data[key]
 
+    def tab_indicator_color(self, idx):
+        """Get the tab indicator color for the given index."""
+        try:
+            return self.tab_data(idx, 'indicator-color')
+        except KeyError:
+            return QColor()
+
     def page_title(self, idx):
         """Get the tab title user data.
 
@@ -474,10 +490,7 @@ class TabBar(QTabBar):
             tab.palette.setColor(QPalette.Window, bg_color)
             tab.palette.setColor(QPalette.WindowText, fg_color)
 
-            try:
-                indicator_color = self.tab_data(idx, 'indicator-color')
-            except KeyError:
-                indicator_color = QColor()
+            indicator_color = self.tab_indicator_color(idx)
             tab.palette.setColor(QPalette.Base, indicator_color)
             if tab.rect.right() < 0 or tab.rect.left() > self.width():
                 # Don't bother drawing a tab if the entire tab is outside of
@@ -594,6 +607,10 @@ class TabBarStyle(QCommonStyle):
             widget: QWidget
         """
         layouts = self._tab_layout(opt)
+        if layouts is None:
+            log.misc.warning("Could not get layouts for tab!")
+            return
+
         if element == QStyle.CE_TabBarTab:
             # We override this so we can control TabBarTabShape/TabBarTabLabel.
             self.drawControl(QStyle.CE_TabBarTabShape, opt, p, widget)
@@ -679,8 +696,11 @@ class TabBarStyle(QCommonStyle):
         indicator_padding = config.get('tabs', 'indicator-padding')
 
         text_rect = QRect(opt.rect)
+        if not text_rect.isValid():
+            # This happens sometimes according to crash reports, but no idea
+            # why...
+            return None
 
-        qtutils.ensure_valid(text_rect)
         text_rect.adjust(padding.left, padding.top, -padding.right,
                          -padding.bottom)
 
@@ -699,13 +719,10 @@ class TabBarStyle(QCommonStyle):
             text_rect.adjust(indicator_width + indicator_padding.left +
                              indicator_padding.right, 0, 0, 0)
 
-        if opt.icon.isNull():
-            icon_rect = QRect()
-        else:
+        icon_rect = self._get_icon_rect(opt, text_rect)
+        if icon_rect.isValid():
             icon_padding = self.pixelMetric(PixelMetrics.icon_padding, opt)
-            icon_rect = self._get_icon_rect(opt, text_rect)
-            if icon_rect.isValid():
-                text_rect.adjust(icon_rect.width() + icon_padding, 0, 0, 0)
+            text_rect.adjust(icon_rect.width() + icon_padding, 0, 0, 0)
 
         text_rect = self._style.visualRect(opt.direction, opt.rect, text_rect)
         return Layouts(text=text_rect, icon=icon_rect,
@@ -729,9 +746,17 @@ class TabBarStyle(QCommonStyle):
                      else QIcon.Disabled)
         icon_state = (QIcon.On if opt.state & QStyle.State_Selected
                       else QIcon.Off)
-        tab_icon_size = opt.icon.actualSize(icon_size, icon_mode, icon_state)
-        tab_icon_size = QSize(min(tab_icon_size.width(), icon_size.width()),
-                              min(tab_icon_size.height(), icon_size.height()))
+        # reserve space for favicon when tab bar is vertical (issue #1968)
+        position = config.get('tabs', 'position')
+        if (opt.icon.isNull() and
+                position in [QTabWidget.East, QTabWidget.West] and
+                config.get('tabs', 'show-favicons')):
+            tab_icon_size = icon_size
+        else:
+            actual_size = opt.icon.actualSize(icon_size, icon_mode, icon_state)
+            tab_icon_size = QSize(
+                min(actual_size.width(), icon_size.width()),
+                min(actual_size.height(), icon_size.height()))
         icon_rect = QRect(text_rect.left(), text_rect.top() + 1,
                           tab_icon_size.width(), tab_icon_size.height())
         icon_rect = self._style.visualRect(opt.direction, opt.rect, icon_rect)

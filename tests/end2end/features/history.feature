@@ -3,7 +3,8 @@ Feature: Page history
     Make sure the global page history is saved correctly.
 
     Background:
-        Given I run :history-clear
+        Given I open about:blank
+        And I run :history-clear
 
     Scenario: Simple history saving
         When I open data/numbers/1.txt
@@ -34,26 +35,41 @@ Feature: Page history
         Then the history file should contain:
             http://localhost:(port)/data/%C3%A4%C3%B6%C3%BC.html Chäschüechli
             
-    @flaky_once
+    @flaky @qtwebengine_todo: Error page message is not implemented
     Scenario: History with an error
         When I run :open file:///does/not/exist
         And I wait for "Error while loading file:///does/not/exist: Error opening /does/not/exist: *" in the log
         Then the history file should contain:
             file:///does/not/exist Error loading page: file:///does/not/exist
 
+    @qtwebengine_todo: Error page message is not implemented
     Scenario: History with a 404
         When I open status/404 without waiting
         And I wait for "Error while loading http://localhost:*/status/404: NOT FOUND" in the log
         Then the history file should contain:
             http://localhost:(port)/status/404 Error loading page: http://localhost:(port)/status/404
 
+    Scenario: History with invalid URL
+        When I run :tab-only
+        And I open data/javascript/window_open.html
+        And I run :click-element id open-invalid
+        Then "Changing title for idx 1 to 'about:blank'" should be logged
+
     Scenario: Clearing history
         When I open data/title.html
         And I run :history-clear
         Then the history file should be empty
 
+    Scenario: History with yanked URL and 'add to history' flag
+        When I open data/hints/html/simple.html
+        And I hint with args "--add-history links yank" and follow a
+        Then the history file should contain:
+            http://localhost:(port)/data/hints/html/simple.html Simple link
+            http://localhost:(port)/data/hello.txt
+
     ## Bugs
 
+    @qtwebengine_skip
     Scenario: Opening a valid URL which turns out invalid
         When I set general -> auto-search to true
         And I run :open http://foo%40bar@baz

@@ -17,51 +17,86 @@
  * along with qutebrowser.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-function scroll_to_perc(x, y) {
-    var elem = document.documentElement;
-    var x_px = window.scrollX;
-    var y_px = window.scrollY;
+"use strict";
 
-    if (x !== undefined) {
-        x_px = (elem.scrollWidth - elem.clientWidth) / 100 * x;
-    }
+window._qutebrowser.scroll = (function() {
+    var funcs = {};
 
-    if (y !== undefined) {
-        y_px  = (elem.scrollHeight - elem.clientHeight) / 100 * y;
-    }
+    funcs.to_perc = function(x, y) {
+        var x_px = window.scrollX;
+        var y_px = window.scrollY;
 
-    window.scroll(x_px, y_px);
-}
+        var width = Math.max(
+            document.body.scrollWidth,
+            document.body.offsetWidth,
+            document.documentElement.scrollWidth,
+            document.documentElement.offsetWidth
+        );
+        var height = Math.max(
+            document.body.scrollHeight,
+            document.body.offsetHeight,
+            document.documentElement.scrollHeight,
+            document.documentElement.offsetHeight
+        );
 
-function scroll_delta_page(x, y) {
-    var dx = document.documentElement.clientWidth * x;
-    var dy = document.documentElement.clientHeight * y;
-    window.scrollBy(dx, dy);
-}
+        if (x !== undefined) {
+            x_px = (width - window.innerWidth) / 100 * x;
+        }
 
-function scroll_pos() {
-    var elem = document.documentElement;
-    var dx = (elem.scrollWidth - elem.clientWidth);
-    var dy = (elem.scrollHeight - elem.clientHeight);
+        if (y !== undefined) {
+            y_px = (height - window.innerHeight) / 100 * y;
+        }
 
-    var perc_x, perc_y;
+        /*
+        console.log(JSON.stringify({
+            "x": x,
+            "window.scrollX": window.scrollX,
+            "window.innerWidth": window.innerWidth,
+            "elem.scrollWidth": document.documentElement.scrollWidth,
+            "x_px": x_px,
+            "y": y,
+            "window.scrollY": window.scrollY,
+            "window.innerHeight": window.innerHeight,
+            "elem.scrollHeight": document.documentElement.scrollHeight,
+            "y_px": y_px,
+        }));
+        */
 
-    if (dx === 0) {
-        perc_x = 0;
-    } else {
-        perc_x = 100 / dx * window.scrollX;
-    }
+        window.scroll(x_px, y_px);
+    };
 
-    if (dy === 0) {
-        perc_y = 0;
-    } else {
-        perc_y = 100 / dy * window.scrollY;
-    }
+    funcs.delta_page = function(x, y) {
+        var dx = window.innerWidth * x;
+        var dy = window.innerHeight * y;
+        window.scrollBy(dx, dy);
+    };
 
-    var pos_perc = {'x': perc_x, 'y': perc_y};
-    var pos_px = {'x': window.scrollX, 'y': window.scrollY};
-    var pos = {'perc': pos_perc, 'px': pos_px};
+    funcs.pos = function() {
+        var pos = {
+            "px": {"x": window.scrollX, "y": window.scrollY},
+            "scroll": {
+                "width": Math.max(
+                    document.body.scrollWidth,
+                    document.body.offsetWidth,
+                    document.documentElement.scrollWidth,
+                    document.documentElement.offsetWidth
+                ),
+                "height": Math.max(
+                    document.body.scrollHeight,
+                    document.body.offsetHeight,
+                    document.documentElement.scrollHeight,
+                    document.documentElement.offsetHeight
+                ),
+            },
+            "inner": {
+                "width": window.innerWidth,
+                "height": window.innerHeight,
+            },
+        };
 
-    // console.log(JSON.stringify(pos));
-    return pos;
-}
+        // console.log(JSON.stringify(pos));
+        return pos;
+    };
+
+    return funcs;
+})();

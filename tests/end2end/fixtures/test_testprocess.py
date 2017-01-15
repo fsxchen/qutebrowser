@@ -102,21 +102,21 @@ class NoReadyPythonProcess(PythonProcess):
         return (sys.executable, ['-c', ';'.join(code)])
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def pyproc():
     proc = PythonProcess()
     yield proc
     proc.terminate()
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def quit_pyproc():
     proc = QuitPythonProcess()
     yield proc
     proc.terminate()
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def noready_pyproc():
     proc = NoReadyPythonProcess()
     yield proc
@@ -138,16 +138,21 @@ def test_quitting_process(qtbot, quit_pyproc):
 
 
 def test_quitting_process_expected(qtbot, quit_pyproc):
-    quit_pyproc.exit_expected = True
     with qtbot.waitSignal(quit_pyproc.proc.finished):
         quit_pyproc.start()
+    quit_pyproc.exit_expected = True
+    quit_pyproc.after_test()
+
+
+def test_process_never_started(qtbot, quit_pyproc):
+    """Calling after_test without start should not fail."""
     quit_pyproc.after_test()
 
 
 def test_wait_signal_raising(qtbot):
     """testprocess._wait_signal should raise by default."""
     proc = testprocess.Process()
-    with pytest.raises(qtbot.SignalTimeoutError):
+    with pytest.raises(qtbot.TimeoutError):
         with proc._wait_signal(proc.proc.started, timeout=0):
             pass
 
@@ -159,12 +164,12 @@ def test_custom_environment(pyproc):
 
 
 @pytest.mark.posix
-def test_custom_environment_no_system(monkeypatch, pyproc):
-    """When env=... is given, no system environment should be present."""
-    monkeypatch.setenv('QUTE_TEST_ENV', 'blah')
-    pyproc.code = 'import os; print(os.environ.get("QUTE_TEST_ENV", "None"))'
+def test_custom_environment_system_env(monkeypatch, pyproc):
+    """When env=... is given, the system environment should be present."""
+    monkeypatch.setenv('QUTE_TEST_ENV', 'blubb')
+    pyproc.code = 'import os; print(os.environ["QUTE_TEST_ENV"])'
     pyproc.start(env={})
-    pyproc.wait_for(data='None')
+    pyproc.wait_for(data='blubb')
 
 
 class TestWaitFor:

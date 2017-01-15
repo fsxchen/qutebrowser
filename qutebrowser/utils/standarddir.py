@@ -21,6 +21,7 @@
 
 import os
 import sys
+import shutil
 import os.path
 
 from PyQt5.QtCore import QCoreApplication, QStandardPaths
@@ -30,6 +31,11 @@ from qutebrowser.utils import log, qtutils, debug
 
 # The argparse namespace passed to init()
 _args = None
+
+
+class EmptyValueError(Exception):
+
+    """Error raised when QStandardPaths returns an empty value."""
 
 
 def config():
@@ -43,7 +49,7 @@ def config():
             # WORKAROUND - see
             # https://bugreports.qt.io/browse/QTBUG-38872
             path = os.path.join(path, appname)
-    _maybe_create(path)
+    _create(path)
     return path
 
 
@@ -61,7 +67,7 @@ def data():
                 QStandardPaths.ConfigLocation)
             if data_path == config_path:
                 path = os.path.join(path, 'data')
-    _maybe_create(path)
+    _create(path)
     return path
 
 
@@ -82,7 +88,7 @@ def cache():
     overridden, path = _from_args(typ, _args)
     if not overridden:
         path = _writable_location(typ)
-    _maybe_create(path)
+    _create(path)
     return path
 
 
@@ -92,7 +98,7 @@ def download():
     overridden, path = _from_args(typ, _args)
     if not overridden:
         path = _writable_location(typ)
-    _maybe_create(path)
+    _create(path)
     return path
 
 
@@ -103,9 +109,18 @@ def runtime():
     else:  # pragma: no cover
         # RuntimeLocation is a weird path on OS X and Windows.
         typ = QStandardPaths.TempLocation
+
     overridden, path = _from_args(typ, _args)
+
     if not overridden:
-        path = _writable_location(typ)
+        try:
+            path = _writable_location(typ)
+        except EmptyValueError:
+            # Fall back to TempLocation when RuntimeLocation is misconfigured
+            if typ == QStandardPaths.TempLocation:
+                raise
+            path = _writable_location(QStandardPaths.TempLocation)
+
         # This is generic, but per-user.
         #
         # For TempLocation:
@@ -116,7 +131,7 @@ def runtime():
         # maximum length of 104 chars), so we don't add the username here...
         appname = QCoreApplication.instance().applicationName()
         path = os.path.join(path, appname)
-    _maybe_create(path)
+    _create(path)
     return path
 
 
@@ -127,7 +142,7 @@ def _writable_location(typ):
     typ_str = debug.qenum_key(QStandardPaths, typ)
     log.misc.debug("writable location for {}: {}".format(typ_str, path))
     if not path:
-        raise ValueError("QStandardPaths returned an empty value!")
+        raise EmptyValueError("QStandardPaths returned an empty value!")
     # Qt seems to use '/' as path separator even on Windows...
     path = path.replace('/', os.sep)
     return path
@@ -145,11 +160,6 @@ def _from_args(typ, args):
             override: boolean, if the user did override the path
             path: The overridden path, or None to turn off storage.
     """
-    typ_to_argparse_arg = {
-        QStandardPaths.ConfigLocation: 'confdir',
-        QStandardPaths.DataLocation: 'datadir',
-        QStandardPaths.CacheLocation: 'cachedir',
-    }
     basedir_suffix = {
         QStandardPaths.ConfigLocation: 'config',
         QStandardPaths.DataLocation: 'data',
@@ -157,9 +167,6 @@ def _from_args(typ, args):
         QStandardPaths.DownloadLocation: 'download',
         QStandardPaths.RuntimeLocation: 'runtime',
     }
-
-    if args is None:
-        return (False, None)
 
     if getattr(args, 'basedir', None) is not None:
         basedir = args.basedir
@@ -169,22 +176,12 @@ def _from_args(typ, args):
         except KeyError:  # pragma: no cover
             return (False, None)
         return (True, os.path.abspath(os.path.join(basedir, suffix)))
-
-    try:
-        argname = typ_to_argparse_arg[typ]
-    except KeyError:
-        return (False, None)
-    arg_value = getattr(args, argname)
-    if arg_value is None:
-        return (False, None)
-    elif arg_value == '':
-        return (True, None)
     else:
-        return (True, arg_value)
+        return (False, None)
 
 
-def _maybe_create(path):
-    """Create the `path` directory if path is not None.
+def _create(path):
+    """Create the `path` directory.
 
     From the XDG basedir spec:
         If, when attempting to write a file, the destination directory is
@@ -192,11 +189,10 @@ def _maybe_create(path):
         0700. If the destination directory exists already the permissions
         should not be changed.
     """
-    if path is not None:
-        try:
-            os.makedirs(path, 0o700)
-        except FileExistsError:
-            pass
+    try:
+        os.makedirs(path, 0o700)
+    except FileExistsError:
+        pass
 
 
 def init(args):
@@ -207,6 +203,8 @@ def init(args):
         log.init.debug("Base directory: {}".format(args.basedir))
     _args = args
     _init_cachedir_tag()
+    if args is not None:
+        _move_webengine_data()
 
 
 def _init_cachedir_tag():
@@ -214,10 +212,7 @@ def _init_cachedir_tag():
 
     See http://www.brynosaurus.com/cachedir/spec.html
     """
-    cache_dir = cache()
-    if cache_dir is None:
-        return
-    cachedir_tag = os.path.join(cache_dir, 'CACHEDIR.TAG')
+    cachedir_tag = os.path.join(cache(), 'CACHEDIR.TAG')
     if not os.path.exists(cachedir_tag):
         try:
             with open(cachedir_tag, 'w', encoding='utf-8') as f:
@@ -229,3 +224,49 @@ def _init_cachedir_tag():
                         "cachedir/\n")
         except OSError:
             log.init.exception("Failed to create CACHEDIR.TAG")
+
+
+def _move_webengine_data():
+    """Move QtWebEngine data from an older location to the new one."""
+    # Do NOT use _writable_location here as that'd give us a wrong path
+    old_data_dir = QStandardPaths.writableLocation(QStandardPaths.DataLocation)
+    old_cache_dir = QStandardPaths.writableLocation(
+        QStandardPaths.CacheLocation)
+    new_data_dir = os.path.join(data(), 'webengine')
+    new_cache_dir = os.path.join(cache(), 'webengine')
+
+    if (not os.path.exists(os.path.join(old_data_dir, 'QtWebEngine')) and
+            not os.path.exists(os.path.join(old_cache_dir, 'QtWebEngine'))):
+        return
+
+    log.init.debug("Moving QtWebEngine data from {} to {}".format(
+        old_data_dir, new_data_dir))
+    log.init.debug("Moving QtWebEngine cache from {} to {}".format(
+        old_cache_dir, new_cache_dir))
+
+    if os.path.exists(new_data_dir):
+        log.init.warning("Failed to move old QtWebEngine data as {} already "
+                         "exists!".format(new_data_dir))
+        return
+    if os.path.exists(new_cache_dir):
+        log.init.warning("Failed to move old QtWebEngine cache as {} already "
+                         "exists!".format(new_cache_dir))
+        return
+
+    try:
+        shutil.move(os.path.join(old_data_dir, 'QtWebEngine', 'Default'),
+                    new_data_dir)
+        shutil.move(os.path.join(old_cache_dir, 'QtWebEngine', 'Default'),
+                    new_cache_dir)
+
+        # Remove e.g.
+        # ~/.local/share/qutebrowser/qutebrowser/QtWebEngine/Default
+        if old_data_dir.split(os.sep)[-2:] == ['qutebrowser', 'qutebrowser']:
+            log.init.debug("Removing {} / {}".format(
+                old_data_dir, old_cache_dir))
+            for old_dir in old_data_dir, old_cache_dir:
+                os.rmdir(os.path.join(old_dir, 'QtWebEngine'))
+                os.rmdir(old_dir)
+    except OSError as e:
+        log.init.exception("Failed to move old QtWebEngine data/cache: "
+                           "{}".format(e))

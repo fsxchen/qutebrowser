@@ -27,10 +27,9 @@ from unittest import mock
 from PyQt5.QtCore import pyqtSignal, QPoint, QProcess, QObject
 from PyQt5.QtNetwork import (QNetworkRequest, QAbstractNetworkCache,
                              QNetworkCacheMetaData)
-from PyQt5.QtWidgets import QCommonStyle, QLineEdit
+from PyQt5.QtWidgets import QCommonStyle, QLineEdit, QWidget, QTabBar
 
-from qutebrowser.browser import browsertab
-from qutebrowser.browser.webkit import history
+from qutebrowser.browser import browsertab, history
 from qutebrowser.config import configexc
 from qutebrowser.utils import usertypes, utils
 from qutebrowser.mainwindow import mainwindow
@@ -74,11 +73,7 @@ class FakeKeyEvent:
 
 class FakeWebFrame:
 
-    """A stub for QWebFrame.
-
-    Attributes:
-        focus_elem: The 'focused' element.
-    """
+    """A stub for QWebFrame."""
 
     def __init__(self, geometry=None, *, scroll=None, plaintext=None,
                  html=None, parent=None, zoom=1.0):
@@ -97,19 +92,9 @@ class FakeWebFrame:
         self.geometry = mock.Mock(return_value=geometry)
         self.scrollPosition = mock.Mock(return_value=scroll)
         self.parentFrame = mock.Mock(return_value=parent)
-        self.focus_elem = None
         self.toPlainText = mock.Mock(return_value=plaintext)
         self.toHtml = mock.Mock(return_value=html)
         self.zoomFactor = mock.Mock(return_value=zoom)
-
-    def findFirstElement(self, selector):
-        if selector == '*:focus':
-            if self.focus_elem is not None:
-                return self.focus_elem
-            else:
-                raise Exception("Trying to get focus element but it's unset!")
-        else:
-            raise Exception("Unknown selector {!r}!".format(selector))
 
 
 class FakeChildrenFrame:
@@ -245,14 +230,17 @@ class FakeWebTab(browsertab.AbstractTab):
                  scroll_pos_perc=(0, 0),
                  load_status=usertypes.LoadStatus.success,
                  progress=0):
-        super().__init__(win_id=0)
+        super().__init__(win_id=0, mode_manager=None)
         self._load_status = load_status
         self._title = title
         self._url = url
         self._progress = progress
         self.scroller = FakeWebTabScroller(self, scroll_pos_perc)
+        wrapped = QWidget()
+        self._layout.wrap(self, wrapped)
 
-    def url(self):
+    def url(self, requested=False):
+        assert not requested
         return self._url
 
     def title(self):
@@ -379,6 +367,28 @@ class FakeTimer(QObject):
         return self._started
 
 
+class InstaTimer(QObject):
+
+    """Stub for a QTimer that fires instantly on start().
+
+    Useful to test a time-based event without inserting an artificial delay.
+    """
+
+    timeout = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def start(self):
+        self.timeout.emit()
+
+    def setSingleShot(self, yes):
+        pass
+
+    def setInterval(self, interval):
+        pass
+
+
 class FakeConfigType:
 
     """A stub to provide valid_values for typ attribute of a SettingValue."""
@@ -389,7 +399,7 @@ class FakeConfigType:
         self.complete = lambda: [(val, '') for val in valid_values]
 
 
-class FakeStatusbarCommand(QLineEdit):
+class StatusBarCommandStub(QLineEdit):
 
     """Stub for the statusbar command prompt."""
 
@@ -561,6 +571,7 @@ class TabbedBrowserStub(QObject):
         super().__init__(parent)
         self.tabs = []
         self.shutting_down = False
+        self._qtabbar = QTabBar()
 
     def count(self):
         return len(self.tabs)
@@ -573,6 +584,9 @@ class TabbedBrowserStub(QObject):
 
     def on_tab_close_requested(self, idx):
         del self.tabs[idx]
+
+    def tabBar(self):
+        return self._qtabbar
 
 
 class ApplicationStub(QObject):

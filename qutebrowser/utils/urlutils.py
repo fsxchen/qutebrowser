@@ -20,17 +20,19 @@
 """Utils regarding URL handling."""
 
 import re
+import base64
 import os.path
 import ipaddress
 import posixpath
 import urllib.parse
 
 from PyQt5.QtCore import QUrl
-from PyQt5.QtNetwork import QHostInfo, QHostAddress
+from PyQt5.QtNetwork import QHostInfo, QHostAddress, QNetworkProxy
 
 from qutebrowser.config import config, configexc
 from qutebrowser.utils import log, qtutils, message, utils
 from qutebrowser.commands import cmdexc
+from qutebrowser.browser.network import pac
 
 
 # FIXME: we probably could raise some exceptions on invalid URLs
@@ -127,7 +129,8 @@ def _is_url_naive(urlstr):
     if not QHostAddress(urlstr).isNull():
         return False
 
-    return '.' in url.host()
+    host = url.host()
+    return '.' in host and not host.endswith('.')
 
 
 def _is_url_dns(urlstr):
@@ -211,7 +214,7 @@ def _has_explicit_scheme(url):
     # symbols, we treat this as not a URI anyways.
     return (url.isValid() and url.scheme() and
             (url.host() or url.path()) and
-            not url.path().startswith(' ') and
+            ' ' not in url.path() and
             not url.path().startswith(':'))
 
 
@@ -320,11 +323,10 @@ def qurl_from_user_input(urlstr):
         return QUrl('http://[{}]{}'.format(ipstr, rest))
 
 
-def invalid_url_error(win_id, url, action):
+def invalid_url_error(url, action):
     """Display an error message for a URL.
 
     Args:
-        win_id: The window ID to show the error message in.
         action: The action which was interrupted by the error.
     """
     if url.isValid():
@@ -332,7 +334,7 @@ def invalid_url_error(win_id, url, action):
             url.toDisplayString()))
     errstring = get_errstring(
         url, "Trying to {} with invalid URL".format(action))
-    message.error(win_id, errstring)
+    message.error(errstring)
 
 
 def raise_cmdexc_if_invalid(url):
@@ -499,7 +501,7 @@ class IncDecError(Exception):
         return '{}: {}'.format(self.msg, self.url.toString())
 
 
-def _get_incdec_value(match, incdec, url):
+def _get_incdec_value(match, incdec, url, count):
     """Get an incremented/decremented URL based on a URL match."""
     pre, zeroes, number, post = match.groups()
     # This should always succeed because we match \d+
@@ -507,9 +509,9 @@ def _get_incdec_value(match, incdec, url):
     if incdec == 'decrement':
         if val <= 0:
             raise IncDecError("Can't decrement {}!".format(val), url)
-        val -= 1
+        val -= count
     elif incdec == 'increment':
-        val += 1
+        val += count
     else:
         raise ValueError("Invalid value {} for indec!".format(incdec))
     if zeroes:
@@ -521,12 +523,13 @@ def _get_incdec_value(match, incdec, url):
     return ''.join([pre, zeroes, str(val), post])
 
 
-def incdec_number(url, incdec, segments=None):
+def incdec_number(url, incdec, count=1, segments=None):
     """Find a number in the url and increment or decrement it.
 
     Args:
         url: The current url
         incdec: Either 'increment' or 'decrement'
+        count: The number to increment or decrement by
         segments: A set of URL segments to search. Valid segments are:
                   'host', 'path', 'query', 'anchor'.
                   Default: {'path', 'query'}
@@ -566,7 +569,7 @@ def incdec_number(url, incdec, segments=None):
         if not match:
             continue
 
-        setter(_get_incdec_value(match, incdec, url))
+        setter(_get_incdec_value(match, incdec, url, count))
         return url
 
     raise IncDecError("No number found in URL!", url)
@@ -579,3 +582,55 @@ def file_url(path):
         path: The absolute path to the local file
     """
     return QUrl.fromLocalFile(path).toString(QUrl.FullyEncoded)
+
+
+def data_url(mimetype, data):
+    """Get a data: QUrl for the given data."""
+    b64 = base64.b64encode(data).decode('ascii')
+    url = QUrl('data:{};base64,{}'.format(mimetype, b64))
+    qtutils.ensure_valid(url)
+    return url
+
+
+class InvalidProxyTypeError(Exception):
+
+    """Error raised when proxy_from_url gets an unknown proxy type."""
+
+    def __init__(self, typ):
+        super().__init__("Invalid proxy type {}!".format(typ))
+
+
+def proxy_from_url(url):
+    """Create a QNetworkProxy from QUrl and a proxy type.
+
+    Args:
+        url: URL of a proxy (possibly with credentials).
+
+    Return:
+        New QNetworkProxy.
+    """
+    if not url.isValid():
+        raise InvalidUrlError(url)
+
+    scheme = url.scheme()
+    if scheme in ['pac+http', 'pac+https']:
+        return pac.PACFetcher
+
+    types = {
+        'http': QNetworkProxy.HttpProxy,
+        'socks': QNetworkProxy.Socks5Proxy,
+        'socks5': QNetworkProxy.Socks5Proxy,
+        'direct': QNetworkProxy.NoProxy,
+    }
+    if scheme not in types:
+        raise InvalidProxyTypeError(scheme)
+
+    proxy = QNetworkProxy(types[scheme], url.host())
+
+    if url.port() != -1:
+        proxy.setPort(url.port())
+    if url.userName():
+        proxy.setUser(url.userName())
+    if url.password():
+        proxy.setPassword(url.password())
+    return proxy

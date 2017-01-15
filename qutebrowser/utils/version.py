@@ -29,12 +29,16 @@ import importlib
 import collections
 
 from PyQt5.QtCore import QT_VERSION_STR, PYQT_VERSION_STR, qVersion
-from PyQt5.QtWebKit import qWebKitVersion
 from PyQt5.QtNetwork import QSslSocket
 from PyQt5.QtWidgets import QApplication
 
+try:
+    from PyQt5.QtWebKit import qWebKitVersion
+except ImportError:  # pragma: no cover
+    qWebKitVersion = None
+
 import qutebrowser
-from qutebrowser.utils import log, utils
+from qutebrowser.utils import log, utils, standarddir
 from qutebrowser.browser import pdfjs
 
 
@@ -148,6 +152,22 @@ def _module_versions():
     return lines
 
 
+def _path_info():
+    """Get info about important path names.
+
+    Return:
+        A dictionary of descriptive to actual path names.
+    """
+    return {
+        'config': standarddir.config(),
+        'data': standarddir.data(),
+        'system_data': standarddir.system_data(),
+        'cache': standarddir.cache(),
+        'download': standarddir.download(),
+        'runtime': standarddir.runtime(),
+    }
+
+
 def _os_info():
     """Get operating system info.
 
@@ -225,10 +245,14 @@ def version():
 
     lines += _module_versions()
 
+    lines += ['pdf.js: {}'.format(_pdfjs_version())]
+
+    if qWebKitVersion is None:
+        lines.append('Webkit: no')
+    else:
+        lines.append('Webkit: {}'.format(qWebKitVersion()))
+
     lines += [
-        'pdf.js: {}'.format(_pdfjs_version()),
-        'Webkit: {}'.format(qWebKitVersion()),
-        'Harfbuzz: {}'.format(os.environ.get('QT_HARFBUZZ', 'system')),
         'SSL: {}'.format(QSslSocket.sslLibraryVersionString()),
         '',
     ]
@@ -243,9 +267,16 @@ def version():
     lines += [
         'Platform: {}, {}'.format(platform.platform(),
                                   platform.architecture()[0]),
-        'Desktop: {}'.format(os.environ.get('DESKTOP_SESSION')),
         'Frozen: {}'.format(hasattr(sys, 'frozen')),
         "Imported from {}".format(importpath),
     ]
     lines += _os_info()
+
+    lines += [
+        '',
+        'Paths:',
+    ]
+    for name, path in _path_info().items():
+        lines += ['{}: {}'.format(name, path)]
+
     return '\n'.join(lines)

@@ -226,20 +226,21 @@ PromptMode = enum('PromptMode', ['yesno', 'text', 'user_pwd', 'alert',
 
 
 # Where to open a clicked link.
-ClickTarget = enum('ClickTarget', ['normal', 'tab', 'tab_bg', 'window'])
+ClickTarget = enum('ClickTarget', ['normal', 'tab', 'tab_bg', 'window',
+                                   'hover'])
 
 
 # Key input modes
 KeyMode = enum('KeyMode', ['normal', 'hint', 'command', 'yesno', 'prompt',
                            'insert', 'passthrough', 'caret', 'set_mark',
-                           'jump_mark'])
+                           'jump_mark', 'record_macro', 'run_macro'])
 
 
 # Available command completions
 Completion = enum('Completion', ['command', 'section', 'option', 'value',
                                  'helptopic', 'quickmark_by_name',
                                  'bookmark_by_url', 'url', 'tab', 'sessions',
-                                 'empty'])
+                                 'bind'])
 
 
 # Exit statuses for errors. Needs to be an int for sys.exit.
@@ -254,50 +255,17 @@ LoadStatus = enum('LoadStatus', ['none', 'success', 'success_https', 'error',
 
 # Backend of a tab
 Backend = enum('Backend', ['QtWebKit', 'QtWebEngine'])
+arg2backend = {
+    'webkit': Backend.QtWebKit,
+    'webengine': Backend.QtWebEngine,
+}
 
 
-# Where a download should be saved
-class DownloadTarget:
-
-    """Abstract base class for different download targets."""
-
-    def __init__(self):
-        raise NotImplementedError
+# JS world for QtWebEngine
+JsWorld = enum('JsWorld', ['main', 'application', 'user', 'jseval'])
 
 
-class FileDownloadTarget(DownloadTarget):
-
-    """Save the download to the given file.
-
-    Attributes:
-        filename: Filename where the download should be saved.
-    """
-
-    def __init__(self, filename):
-        # pylint: disable=super-init-not-called
-        self.filename = filename
-
-
-class FileObjDownloadTarget(DownloadTarget):
-
-    """Save the download to the given file-like object.
-
-    Attributes:
-        fileobj: File-like object where the download should be written to.
-    """
-
-    def __init__(self, fileobj):
-        # pylint: disable=super-init-not-called
-        self.fileobj = fileobj
-
-
-class OpenFileDownloadTarget(DownloadTarget):
-
-    """Save the download in a temp dir and directly open it."""
-
-    def __init__(self):
-        # pylint: disable=super-init-not-called
-        pass
+MessageLevel = enum('MessageLevel', ['error', 'warning', 'info'])
 
 
 class Question(QObject):
@@ -317,10 +285,11 @@ class Question(QObject):
                  For yesno, None (no default), True or False.
                  For text, a default text as string.
                  For user_pwd, a default username as string.
+        title: The question title to show.
         text: The prompt text to display to the user.
-        user: The value the user entered as username.
         answer: The value the user entered (as password for user_pwd).
         is_aborted: Whether the question was aborted.
+        interrupted: Whether the question was interrupted by another one.
 
     Signals:
         answered: Emitted when the question has been answered by the user.
@@ -346,14 +315,15 @@ class Question(QObject):
         super().__init__(parent)
         self._mode = None
         self.default = None
+        self.title = None
         self.text = None
-        self.user = None
         self.answer = None
         self.is_aborted = False
+        self.interrupted = False
 
     def __repr__(self):
-        return utils.get_repr(self, text=self.text, mode=self._mode,
-                              default=self.default)
+        return utils.get_repr(self, title=self.title, text=self.text,
+                              mode=self._mode, default=self.default)
 
     @property
     def mode(self):
@@ -387,6 +357,9 @@ class Question(QObject):
     @pyqtSlot()
     def abort(self):
         """Abort the question."""
+        if self.is_aborted:
+            log.misc.debug("Question was already aborted")
+            return
         self.is_aborted = True
         try:
             self.aborted.emit()
@@ -429,3 +402,20 @@ class Timer(QTimer):
             super().start(msec)
         else:
             super().start()
+
+
+class AbstractCertificateErrorWrapper:
+
+    """A wrapper over an SSL/certificate error."""
+
+    def __init__(self, error):
+        self._error = error
+
+    def __str__(self):
+        raise NotImplementedError
+
+    def __repr__(self):
+        raise NotImplementedError
+
+    def is_overridable(self):
+        raise NotImplementedError

@@ -74,7 +74,7 @@ class TestGitStr:
 
     """Tests for _git_str()."""
 
-    @pytest.yield_fixture
+    @pytest.fixture
     def commit_file_mock(self, mocker):
         """Fixture providing a mock for utils.read_file for git-commit-id.
 
@@ -311,6 +311,30 @@ def test_release_info(files, expected, caplog, monkeypatch):
     if files is None:
         assert len(caplog.records) == 1
         assert caplog.records[0].message == "Error while reading fake-file."
+
+
+def test_path_info(monkeypatch):
+    """Test _path_info()."""
+    patches = {
+        'config': lambda: 'CONFIG PATH',
+        'data': lambda: 'DATA PATH',
+        'system_data': lambda: 'SYSTEM DATA PATH',
+        'cache': lambda: 'CACHE PATH',
+        'download': lambda: 'DOWNLOAD PATH',
+        'runtime': lambda: 'RUNTIME PATH',
+    }
+
+    for attr, val in patches.items():
+        monkeypatch.setattr('qutebrowser.utils.standarddir.' + attr, val)
+
+    pathinfo = version._path_info()
+
+    assert pathinfo['config'] == 'CONFIG PATH'
+    assert pathinfo['data'] == 'DATA PATH'
+    assert pathinfo['system_data'] == 'SYSTEM DATA PATH'
+    assert pathinfo['cache'] == 'CACHE PATH'
+    assert pathinfo['download'] == 'DOWNLOAD PATH'
+    assert pathinfo['runtime'] == 'RUNTIME PATH'
 
 
 class ImportFake:
@@ -614,15 +638,16 @@ class FakeQSslSocket:
         return self._version
 
 
-@pytest.mark.parametrize('git_commit, harfbuzz, frozen, style, equal_qt', [
-    (True, True, False, True, True),  # normal
-    (False, True, False, True, True),  # no git commit
-    (True, False, False, True, True),  # HARFBUZZ unset
+@pytest.mark.parametrize(['git_commit', 'frozen', 'style',
+                          'equal_qt', 'with_webkit'], [
+    (True, False, True, True, True),  # normal
+    (False, False, True, True, True),  # no git commit
     (True, True, True, True, True),  # frozen
-    (True, True, True, False, True),  # no style
-    (True, True, False, True, False),  # different Qt
+    (True, True, False, True, True),  # no style
+    (True, False, True, False, True),  # different Qt
+    (True, False, True, True, False),  # no webkit
 ])
-def test_version_output(git_commit, harfbuzz, frozen, style, equal_qt,
+def test_version_output(git_commit, frozen, style, equal_qt, with_webkit,
                         stubs, monkeypatch):
     """Test version.version()."""
     import_path = os.path.abspath('/IMPORTPATH')
@@ -638,24 +663,18 @@ def test_version_output(git_commit, harfbuzz, frozen, style, equal_qt,
                      'QT VERSION' if equal_qt else 'QT RUNTIME VERSION'),
         '_module_versions': lambda: ['MODULE VERSION 1', 'MODULE VERSION 2'],
         '_pdfjs_version': lambda: 'PDFJS VERSION',
-        'qWebKitVersion': lambda: 'WEBKIT VERSION',
+        'qWebKitVersion': (lambda: 'WEBKIT VERSION') if with_webkit else None,
         'QSslSocket': FakeQSslSocket('SSL VERSION'),
         'platform.platform': lambda: 'PLATFORM',
         'platform.architecture': lambda: ('ARCHITECTURE', ''),
         '_os_info': lambda: ['OS INFO 1', 'OS INFO 2'],
+        '_path_info': lambda: {'PATH DESC': 'PATH NAME'},
         'QApplication': (stubs.FakeQApplication(style='STYLE') if style else
                          stubs.FakeQApplication(instance=None)),
     }
 
     for attr, val in patches.items():
         monkeypatch.setattr('qutebrowser.utils.version.' + attr, val)
-
-    monkeypatch.setenv('DESKTOP_SESSION', 'DESKTOP')
-
-    if harfbuzz:
-        monkeypatch.setenv('QT_HARFBUZZ', 'HARFBUZZ')
-    else:
-        monkeypatch.delenv('QT_HARFBUZZ', raising=False)
 
     if frozen:
         monkeypatch.setattr(sys, 'frozen', True, raising=False)
@@ -672,16 +691,17 @@ def test_version_output(git_commit, harfbuzz, frozen, style, equal_qt,
         MODULE VERSION 1
         MODULE VERSION 2
         pdf.js: PDFJS VERSION
-        Webkit: WEBKIT VERSION
-        Harfbuzz: {harfbuzz}
+        Webkit: {webkit}
         SSL: SSL VERSION
         {style}
         Platform: PLATFORM, ARCHITECTURE
-        Desktop: DESKTOP
         Frozen: {frozen}
         Imported from {import_path}
         OS INFO 1
         OS INFO 2
+
+        Paths:
+        PATH DESC: PATH NAME
     """.lstrip('\n'))
 
     substitutions = {
@@ -689,9 +709,9 @@ def test_version_output(git_commit, harfbuzz, frozen, style, equal_qt,
         'style': '\nStyle: STYLE' if style else '',
         'qt': ('QT VERSION' if equal_qt else
                'QT RUNTIME VERSION (compiled QT VERSION)'),
-        'harfbuzz': 'HARFBUZZ' if harfbuzz else 'system',
         'frozen': str(frozen),
         'import_path': import_path,
+        'webkit': 'WEBKIT VERSION' if with_webkit else 'no'
     }
 
     expected = template.rstrip('\n').format(**substitutions)

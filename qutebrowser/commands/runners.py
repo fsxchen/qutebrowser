@@ -21,17 +21,17 @@
 
 import collections
 import traceback
+import re
 
 from PyQt5.QtCore import pyqtSlot, QUrl, QObject
 
 from qutebrowser.config import config, configexc
 from qutebrowser.commands import cmdexc, cmdutils
-from qutebrowser.utils import message, objreg, qtutils
+from qutebrowser.utils import message, objreg, qtutils, usertypes, utils
 from qutebrowser.misc import split
 
 
-ParseResult = collections.namedtuple('ParseResult', ['cmd', 'args', 'cmdline',
-                                                     'count'])
+ParseResult = collections.namedtuple('ParseResult', ['cmd', 'args', 'cmdline'])
 last_command = {}
 
 
@@ -49,21 +49,35 @@ def _current_url(tabbed_browser):
 
 def replace_variables(win_id, arglist):
     """Utility function to replace variables like {url} in a list of args."""
+    variables = {
+        'url': lambda: _current_url(tabbed_browser).toString(
+            QUrl.FullyEncoded | QUrl.RemovePassword),
+        'url:pretty': lambda: _current_url(tabbed_browser).toString(
+            QUrl.DecodeReserved | QUrl.RemovePassword),
+        'clipboard': utils.get_clipboard,
+        'primary': lambda: utils.get_clipboard(selection=True),
+    }
+    values = {}
     args = []
     tabbed_browser = objreg.get('tabbed-browser', scope='window',
                                 window=win_id)
-    if '{url}' in arglist:
-        url = _current_url(tabbed_browser).toString(QUrl.FullyEncoded |
-                                                    QUrl.RemovePassword)
-    if '{url:pretty}' in arglist:
-        pretty_url = _current_url(tabbed_browser).toString(QUrl.RemovePassword)
-    for arg in arglist:
-        if arg == '{url}':
-            args.append(url)
-        elif arg == '{url:pretty}':
-            args.append(pretty_url)
-        else:
-            args.append(arg)
+
+    def repl_cb(matchobj):
+        """Return replacement for given match."""
+        var = matchobj.group("var")
+        if var not in values:
+            values[var] = variables[var]()
+        return values[var]
+    repl_pattern = re.compile("{(?P<var>" + "|".join(variables.keys()) + ")}")
+
+    try:
+        for arg in arglist:
+            # using re.sub with callback function replaces all variables in a
+            # single pass and avoids expansion of nested variables (e.g.
+            # "{url}" from clipboard is not expanded)
+            args.append(repl_pattern.sub(repl_cb, arg))
+    except utils.ClipboardError as e:
+        raise cmdexc.CommandError(e)
     return args
 
 
@@ -139,35 +153,6 @@ class CommandRunner(QObject):
         for sub in sub_texts:
             yield self.parse(sub, *args, **kwargs)
 
-    def _parse_count(self, cmdstr):
-        """Split a count prefix off from a command for parse().
-
-        Args:
-            cmdstr: The command/args including the count.
-
-        Return:
-            A (count, cmdstr) tuple, with count being None or int.
-        """
-        if ':' not in cmdstr:
-            return (None, cmdstr)
-
-        count, cmdstr = cmdstr.split(':', maxsplit=1)
-        try:
-            count = int(count)
-        except ValueError:
-            # We just ignore invalid prefixes
-            count = None
-        return (count, cmdstr)
-
-    def _parse_fallback(self, text, count, keep):
-        """Parse the given commandline without a valid command."""
-        if keep:
-            cmdstr, sep, argstr = text.partition(' ')
-            cmdline = [cmdstr, sep] + argstr.split()
-        else:
-            cmdline = text.split()
-        return ParseResult(cmd=None, args=None, cmdline=cmdline, count=count)
-
     def parse(self, text, *, fallback=False, keep=False):
         """Split the commandline text into command and arguments.
 
@@ -181,7 +166,6 @@ class CommandRunner(QObject):
             A ParseResult tuple.
         """
         cmdstr, sep, argstr = text.partition(' ')
-        count, cmdstr = self._parse_count(cmdstr)
 
         if not cmdstr and not fallback:
             raise cmdexc.NoSuchCommandError("No command given")
@@ -195,7 +179,8 @@ class CommandRunner(QObject):
             if not fallback:
                 raise cmdexc.NoSuchCommandError(
                     '{}: no such command'.format(cmdstr))
-            return self._parse_fallback(text, count, keep)
+            cmdline = split.split(text, keep=keep)
+            return ParseResult(cmd=None, args=None, cmdline=cmdline)
 
         args = self._split_args(cmd, argstr, keep)
         if keep and args:
@@ -205,7 +190,7 @@ class CommandRunner(QObject):
         else:
             cmdline = [cmdstr] + args[:]
 
-        return ParseResult(cmd=cmd, args=args, cmdline=cmdline, count=count)
+        return ParseResult(cmd=cmd, args=args, cmdline=cmdline)
 
     def _completion_match(self, cmdstr):
         """Replace cmdstr with a matching completion if there's only one match.
@@ -274,26 +259,33 @@ class CommandRunner(QObject):
             text: The text to parse.
             count: The count to pass to the command.
         """
+        record_last_command = True
+        record_macro = True
+
+        mode_manager = objreg.get('mode-manager', scope='window',
+                                  window=self._win_id)
+        cur_mode = mode_manager.mode
+
         for result in self.parse_all(text):
-            mode_manager = objreg.get('mode-manager', scope='window',
-                                      window=self._win_id)
-            cur_mode = mode_manager.mode
-
-            args = replace_variables(self._win_id, result.args)
-            if count is not None:
-                if result.count is not None:
-                    raise cmdexc.CommandMetaError("Got count via command and "
-                                                  "prefix!")
-                result.cmd.run(self._win_id, args, count=count)
-            elif result.count is not None:
-                result.cmd.run(self._win_id, args, count=result.count)
+            if result.cmd.no_replace_variables:
+                args = result.args
             else:
-                result.cmd.run(self._win_id, args)
+                args = replace_variables(self._win_id, result.args)
+            result.cmd.run(self._win_id, args, count=count)
 
-            if result.cmdline[0] != 'repeat-command':
-                last_command[cur_mode] = (
-                    self._parse_count(text)[1],
-                    count if count is not None else result.count)
+            if result.cmdline[0] == 'repeat-command':
+                record_last_command = False
+
+            if result.cmdline[0] in ['record-macro', 'run-macro',
+                                     'set-cmd-text']:
+                record_macro = False
+
+        if record_last_command:
+            last_command[cur_mode] = (text, count)
+
+        if record_macro and cur_mode == usertypes.KeyMode.normal:
+            macro_recorder = objreg.get('macro-recorder')
+            macro_recorder.record_command(text, count)
 
     @pyqtSlot(str, int)
     @pyqtSlot(str)
@@ -302,8 +294,7 @@ class CommandRunner(QObject):
         try:
             self.run(text, count)
         except (cmdexc.CommandMetaError, cmdexc.CommandError) as e:
-            message.error(self._win_id, e, immediately=True,
-                          stack=traceback.format_exc())
+            message.error(str(e), stack=traceback.format_exc())
 
     @pyqtSlot(str, int)
     def run_safely_init(self, text, count=None):
@@ -315,4 +306,4 @@ class CommandRunner(QObject):
         try:
             self.run(text, count)
         except (cmdexc.CommandMetaError, cmdexc.CommandError) as e:
-            message.error(self._win_id, e, stack=traceback.format_exc())
+            message.error(str(e), stack=traceback.format_exc())

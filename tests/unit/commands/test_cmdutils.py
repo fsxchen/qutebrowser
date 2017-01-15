@@ -21,6 +21,10 @@
 
 """Tests for qutebrowser.commands.cmdutils."""
 
+import sys
+import logging
+import types
+
 import pytest
 
 from qutebrowser.commands import cmdutils, cmdexc, argparser, command
@@ -62,29 +66,6 @@ class TestCheckOverflow:
                         "representation.")
 
         assert str(excinfo.value) == expected_str
-
-
-class TestArgOrCount:
-
-    @pytest.mark.parametrize('arg, count', [(None, None), (1, 1)])
-    def test_exceptions(self, arg, count):
-        with pytest.raises(ValueError):
-            cmdutils.arg_or_count(arg, count)
-
-    @pytest.mark.parametrize('arg, count', [(1, None), (None, 1)])
-    def test_normal(self, arg, count):
-        assert cmdutils.arg_or_count(arg, count) == 1
-
-    @pytest.mark.parametrize('arg, count, countzero, expected', [
-        (0, None, 2, 0),
-        (None, 0, 2, 2),
-    ])
-    def test_countzero(self, arg, count, countzero, expected):
-        ret = cmdutils.arg_or_count(arg, count, countzero=countzero)
-        assert ret == expected
-
-    def test_default(self):
-        assert cmdutils.arg_or_count(None, None, default=2) == 2
 
 
 class TestCheckExclusive:
@@ -202,30 +183,38 @@ class TestRegister:
         @cmdutils.register(star_args_optional=True)
         def fun(*args):
             """Blah."""
-            pass
-        cmdutils.cmd_dict['fun'].parser.parse_args([])
+            assert not args
+        cmd = cmdutils.cmd_dict['fun']
+        cmd.namespace = cmd.parser.parse_args([])
+        args, kwargs = cmd._get_call_args(win_id=0)
+        fun(*args, **kwargs)
 
-    def test_flag(self):
+    @pytest.mark.parametrize('inp, expected', [
+        (['--arg'], True), (['-a'], True), ([], False)])
+    def test_flag(self, inp, expected):
         @cmdutils.register()
         def fun(arg=False):
             """Blah."""
-            pass
-        parser = cmdutils.cmd_dict['fun'].parser
-        assert parser.parse_args(['--arg']).arg
-        assert parser.parse_args(['-a']).arg
-        assert not parser.parse_args([]).arg
+            assert arg == expected
+        cmd = cmdutils.cmd_dict['fun']
+        cmd.namespace = cmd.parser.parse_args(inp)
+        assert cmd.namespace.arg == expected
 
     def test_flag_argument(self):
         @cmdutils.register()
         @cmdutils.argument('arg', flag='b')
         def fun(arg=False):
             """Blah."""
-            pass
-        parser = cmdutils.cmd_dict['fun'].parser
+            assert arg
+        cmd = cmdutils.cmd_dict['fun']
 
-        assert parser.parse_args(['-b']).arg
         with pytest.raises(argparser.ArgumentParserError):
-            parser.parse_args(['-a'])
+            cmd.parser.parse_args(['-a'])
+
+        cmd.namespace = cmd.parser.parse_args(['-b'])
+        assert cmd.namespace.arg
+        args, kwargs = cmd._get_call_args(win_id=0)
+        fun(*args, **kwargs)
 
     def test_partial_arg(self):
         """Test with only some arguments decorated with @cmdutils.argument."""
@@ -303,7 +292,7 @@ class TestRegister:
         @cmdutils.argument('arg', choices=choices)
         def fun(arg: typ):
             """Blah."""
-            pass
+            assert arg == expected
 
         cmd = cmdutils.cmd_dict['fun']
         cmd.namespace = cmd.parser.parse_args([inp])
@@ -312,7 +301,79 @@ class TestRegister:
             with pytest.raises(cmdexc.ArgumentTypeError):
                 cmd._get_call_args(win_id=0)
         else:
-            assert cmd._get_call_args(win_id=0) == ([expected], {})
+            args, kwargs = cmd._get_call_args(win_id=0)
+            assert args == [expected]
+            assert kwargs == {}
+            fun(*args, **kwargs)
+
+    def test_choices_no_annotation(self):
+        # https://github.com/The-Compiler/qutebrowser/issues/1871
+        @cmdutils.register()
+        @cmdutils.argument('arg', choices=['foo', 'bar'])
+        def fun(arg):
+            """Blah."""
+            pass
+
+        cmd = cmdutils.cmd_dict['fun']
+        cmd.namespace = cmd.parser.parse_args(['fish'])
+
+        with pytest.raises(cmdexc.ArgumentTypeError):
+            cmd._get_call_args(win_id=0)
+
+    def test_choices_no_annotation_kwonly(self):
+        # https://github.com/The-Compiler/qutebrowser/issues/1871
+        @cmdutils.register()
+        @cmdutils.argument('arg', choices=['foo', 'bar'])
+        def fun(*, arg='foo'):
+            """Blah."""
+            pass
+
+        cmd = cmdutils.cmd_dict['fun']
+        cmd.namespace = cmd.parser.parse_args(['--arg=fish'])
+
+        with pytest.raises(cmdexc.ArgumentTypeError):
+            cmd._get_call_args(win_id=0)
+
+    def test_pos_arg_info(self):
+        @cmdutils.register()
+        @cmdutils.argument('foo', choices=('a', 'b'))
+        @cmdutils.argument('bar', choices=('x', 'y'))
+        @cmdutils.argument('opt')
+        def fun(foo, bar, opt=False):
+            """Blah."""
+            pass
+
+        cmd = cmdutils.cmd_dict['fun']
+        assert cmd.get_pos_arg_info(0) == command.ArgInfo(choices=('a', 'b'))
+        assert cmd.get_pos_arg_info(1) == command.ArgInfo(choices=('x', 'y'))
+        with pytest.raises(IndexError):
+            cmd.get_pos_arg_info(2)
+
+    def test_keyword_only_without_default(self):
+        # https://github.com/The-Compiler/qutebrowser/issues/1872
+        def fun(*, target):
+            """Blah."""
+            pass
+
+        with pytest.raises(TypeError) as excinfo:
+            fun = cmdutils.register()(fun)
+
+        expected = ("fun: handler has keyword only argument 'target' without "
+                    "default!")
+        assert str(excinfo.value) == expected
+
+    def test_typed_keyword_only_without_default(self):
+        # https://github.com/The-Compiler/qutebrowser/issues/1872
+        def fun(*, target: int):
+            """Blah."""
+            pass
+
+        with pytest.raises(TypeError) as excinfo:
+            fun = cmdutils.register()(fun)
+
+        expected = ("fun: handler has keyword only argument 'target' without "
+                    "default!")
+        assert str(excinfo.value) == expected
 
 
 class TestArgument:
@@ -361,6 +422,25 @@ class TestArgument:
                 pass
 
         assert str(excinfo.value) == "Argument marked as both count/win_id!"
+
+    def test_no_docstring(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            @cmdutils.register()
+            def fun():
+                # no docstring
+                pass
+        assert len(caplog.records) == 1
+        msg = caplog.records[0].message
+        assert msg.endswith('test_cmdutils.py has no docstring')
+
+    def test_no_docstring_with_optimize(self, monkeypatch):
+        """With -OO we'd get a warning on start, but no warning afterwards."""
+        monkeypatch.setattr(sys, 'flags', types.SimpleNamespace(optimize=2))
+
+        @cmdutils.register()
+        def fun():
+            # no docstring
+            pass
 
 
 class TestRun:

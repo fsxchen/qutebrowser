@@ -28,6 +28,7 @@ CI machines.
 
 from __future__ import print_function
 
+import time
 import subprocess
 import urllib
 
@@ -46,16 +47,22 @@ def pip_install(pkg):
 print("Getting PyQt5...")
 qt_version = '5.5.1'
 pyqt_version = '5.5.1'
-pyqt_url = ('http://www.qutebrowser.org/pyqt/'
+pyqt_url = ('https://www.qutebrowser.org/pyqt/'
             'PyQt5-{}-gpl-Py3.4-Qt{}-x32.exe'.format(
                 pyqt_version, qt_version))
-urllib.urlretrieve(pyqt_url, r'C:\install-PyQt5.exe')
+
+try:
+    urllib.urlretrieve(pyqt_url, r'C:\install-PyQt5.exe')
+except (OSError, IOError):
+    print("Downloading PyQt failed, trying again in 10 seconds...")
+    time.sleep(10)
+    urllib.urlretrieve(pyqt_url, r'C:\install-PyQt5.exe')
 
 print("Installing PyQt5...")
 subprocess.check_call([r'C:\install-PyQt5.exe', '/S'])
 
-print("Installing pip/tox")
-pip_install(r'-rmisc\requirements\requirements-pip.txt')
+print("Installing tox")
+pip_install('pip')
 pip_install(r'-rmisc\requirements\requirements-tox.txt')
 
 print("Linking Python...")

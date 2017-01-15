@@ -42,7 +42,7 @@ class KeyHintView(QLabel):
         _win_id: Window ID of parent.
 
     Signals:
-        reposition_keyhint: Emitted when this widget should be resized.
+        update_geometry: Emitted when this widget should be resized/positioned.
     """
 
     STYLESHEET = """
@@ -51,29 +51,32 @@ class KeyHintView(QLabel):
             color: {{ color['keyhint.fg'] }};
             background-color: {{ color['keyhint.bg'] }};
             padding: 6px;
-            border-top-right-radius: 6px;
+            {% if config.get('ui', 'status-position') == 'top' %}
+                border-bottom-right-radius: 6px;
+            {% else %}
+                border-top-right-radius: 6px;
+            {% endif %}
         }
     """
-
-    reposition_keyhint = pyqtSignal()
+    update_geometry = pyqtSignal()
 
     def __init__(self, win_id, parent=None):
         super().__init__(parent)
         self.setTextFormat(Qt.RichText)
         self._win_id = win_id
-        style.set_register_stylesheet(self)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
         self.hide()
         self._show_timer = usertypes.Timer(self, 'keyhint_show')
         self._show_timer.setInterval(500)
         self._show_timer.timeout.connect(self.show)
+        style.set_register_stylesheet(self)
 
     def __repr__(self):
         return utils.get_repr(self, win_id=self._win_id)
 
     def showEvent(self, e):
         """Adjust the keyhint size when it's freshly shown."""
-        self.reposition_keyhint.emit()
+        self.update_geometry.emit()
         super().showEvent(e)
 
     @pyqtSlot(str)
@@ -126,4 +129,4 @@ class KeyHintView(QLabel):
 
         self.setText(text)
         self.adjustSize()
-        self.reposition_keyhint.emit()
+        self.update_geometry.emit()

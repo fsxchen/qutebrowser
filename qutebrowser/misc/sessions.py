@@ -31,9 +31,8 @@ try:
 except ImportError:  # pragma: no cover
     from yaml import SafeLoader as YamlLoader, SafeDumper as YamlDumper
 
-from qutebrowser.browser.webkit import tabhistory
 from qutebrowser.utils import (standarddir, objreg, qtutils, log, usertypes,
-                               message)
+                               message, utils)
 from qutebrowser.commands import cmdexc, cmdutils
 from qutebrowser.mainwindow import mainwindow
 from qutebrowser.config import config
@@ -48,15 +47,11 @@ def init(parent=None):
     Args:
         parent: The parent to use for the SessionManager.
     """
-    data_dir = standarddir.data()
-    if data_dir is None:
-        base_path = None
-    else:
-        base_path = os.path.join(standarddir.data(), 'sessions')
-        try:
-            os.mkdir(base_path)
-        except FileExistsError:
-            pass
+    base_path = os.path.join(standarddir.data(), 'sessions')
+    try:
+        os.mkdir(base_path)
+    except FileExistsError:
+        pass
 
     session_manager = SessionManager(base_path, parent)
     objreg.register('session-manager', session_manager)
@@ -70,6 +65,35 @@ class SessionError(Exception):
 class SessionNotFoundError(SessionError):
 
     """Exception raised when a session to be loaded was not found."""
+
+
+class TabHistoryItem:
+
+    """A single item in the tab history.
+
+    Attributes:
+        url: The QUrl of this item.
+        original_url: The QUrl of this item which was originally requested.
+        title: The title as string of this item.
+        active: Whether this item is the item currently navigated to.
+        user_data: The user data for this item.
+    """
+
+    def __init__(self, url, title, *, original_url=None, active=False,
+                 user_data=None):
+        self.url = url
+        if original_url is None:
+            self.original_url = url
+        else:
+            self.original_url = original_url
+        self.title = title
+        self.active = active
+        self.user_data = user_data
+
+    def __repr__(self):
+        return utils.get_repr(self, constructor=True, url=self.url,
+                              original_url=self.original_url, title=self.title,
+                              active=self.active, user_data=self.user_data)
 
 
 class SessionManager(QObject):
@@ -109,11 +133,6 @@ class SessionManager(QObject):
         if os.path.isabs(path) and ((not check_exists) or
                                     os.path.exists(path)):
             return path
-        elif self._base_path is None:
-            if check_exists:
-                raise SessionNotFoundError(name)
-            else:
-                return None
         else:
             path = os.path.join(self._base_path, name + '.yml')
             if check_exists and not os.path.exists(path):
@@ -251,8 +270,6 @@ class SessionManager(QObject):
         """
         name = self._get_session_name(name)
         path = self._get_session_path(name)
-        if path is None:
-            raise SessionError("No data storage configured.")
 
         log.sessions.debug("Saving session {} to {}...".format(name, path))
         if last_window:
@@ -311,9 +328,9 @@ class SessionManager(QObject):
                     histentry['original-url'].encode('ascii'))
             else:
                 orig_url = url
-            entry = tabhistory.TabHistoryItem(
-                url=url, original_url=orig_url, title=histentry['title'],
-                active=active, user_data=user_data)
+            entry = TabHistoryItem(url=url, original_url=orig_url,
+                                   title=histentry['title'], active=active,
+                                   user_data=user_data)
             entries.append(entry)
             if active:
                 new_tab.title_changed.emit(histentry['title'])
@@ -364,8 +381,6 @@ class SessionManager(QObject):
     def list_sessions(self):
         """Get a list of all session names."""
         sessions = []
-        if self._base_path is None:
-            return sessions
         for filename in os.listdir(self._base_path):
             base, ext = os.path.splitext(filename)
             if ext == '.yml':
@@ -401,14 +416,12 @@ class SessionManager(QObject):
                     win.close()
 
     @cmdutils.register(name=['session-save', 'w'], instance='session-manager')
-    @cmdutils.argument('win_id', win_id=True)
     @cmdutils.argument('name', completion=usertypes.Completion.sessions)
-    def session_save(self, win_id, name: str=default, current=False,
-                     quiet=False, force=False):
+    def session_save(self, name: str=default, current=False, quiet=False,
+                     force=False):
         """Save a session.
 
         Args:
-            win_id: The current window ID.
             name: The name of the session. If not given, the session configured
                   in general -> session-default-name is saved.
             current: Save the current session instead of the default.
@@ -432,8 +445,7 @@ class SessionManager(QObject):
                                       .format(e))
         else:
             if not quiet:
-                message.info(win_id, "Saved session {}.".format(name),
-                             immediately=True)
+                message.info("Saved session {}.".format(name))
 
     @cmdutils.register(instance='session-manager')
     @cmdutils.argument('name', completion=usertypes.Completion.sessions)
@@ -456,3 +468,5 @@ class SessionManager(QObject):
             log.sessions.exception("Error while deleting session!")
             raise cmdexc.CommandError("Error while deleting session: {}"
                                       .format(e))
+        else:
+            log.sessions.debug("Deleted session {}.".format(name))

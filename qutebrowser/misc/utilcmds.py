@@ -20,7 +20,8 @@
 """Misc. utility commands exposed to the user."""
 
 import functools
-import types
+import os
+import signal
 import traceback
 
 try:
@@ -28,18 +29,19 @@ try:
 except ImportError:
     hunter = None
 
-from qutebrowser.browser.webkit.network import qutescheme
+import sip
+from PyQt5.QtCore import QUrl
+# so it's available for :debug-pyeval
+from PyQt5.QtWidgets import QApplication  # pylint: disable=unused-import
+
+from qutebrowser.browser import qutescheme
 from qutebrowser.utils import log, objreg, usertypes, message, debug, utils
 from qutebrowser.commands import cmdutils, runners, cmdexc
 from qutebrowser.config import style
 from qutebrowser.misc import consolewidget
 
-from PyQt5.QtCore import QUrl
-# so it's available for :debug-pyeval
-from PyQt5.QtWidgets import QApplication  # pylint: disable=unused-import
 
-
-@cmdutils.register(maxsplit=1, no_cmd_split=True)
+@cmdutils.register(maxsplit=1, no_cmd_split=True, no_replace_variables=True)
 @cmdutils.argument('win_id', win_id=True)
 def later(ms: int, command, win_id):
     """Execute a command after some time.
@@ -69,7 +71,7 @@ def later(ms: int, command, win_id):
         raise
 
 
-@cmdutils.register(maxsplit=1, no_cmd_split=True)
+@cmdutils.register(maxsplit=1, no_cmd_split=True, no_replace_variables=True)
 @cmdutils.argument('win_id', win_id=True)
 def repeat(times: int, command, win_id):
     """Repeat a given command.
@@ -85,37 +87,51 @@ def repeat(times: int, command, win_id):
         commandrunner.run_safely(command)
 
 
-@cmdutils.register(hide=True)
+@cmdutils.register(maxsplit=1, hide=True, no_cmd_split=True,
+                   no_replace_variables=True)
 @cmdutils.argument('win_id', win_id=True)
-def message_error(win_id, text):
+@cmdutils.argument('count', count=True)
+def run_with_count(count_arg: int, command, win_id, count=1):
+    """Run a command with the given count.
+
+    If run_with_count itself is run with a count, it multiplies count_arg.
+
+    Args:
+        count_arg: The count to pass to the command.
+        command: The command to run, with optional args.
+        count: The count that run_with_count itself received.
+    """
+    runners.CommandRunner(win_id).run(command, count_arg * count)
+
+
+@cmdutils.register(hide=True)
+def message_error(text):
     """Show an error message in the statusbar.
 
     Args:
         text: The text to show.
     """
-    message.error(win_id, text)
+    message.error(text)
 
 
 @cmdutils.register(hide=True)
-@cmdutils.argument('win_id', win_id=True)
-def message_info(win_id, text):
+def message_info(text):
     """Show an info message in the statusbar.
 
     Args:
         text: The text to show.
     """
-    message.info(win_id, text)
+    message.info(text)
 
 
 @cmdutils.register(hide=True)
-@cmdutils.argument('win_id', win_id=True)
-def message_warning(win_id, text):
+def message_warning(text):
     """Show a warning message in the statusbar.
 
     Args:
         text: The text to show.
     """
-    message.warning(win_id, text)
+    message.warning(text)
 
 
 @cmdutils.register(debug=True)
@@ -127,10 +143,7 @@ def debug_crash(typ='exception'):
         typ: either 'exception' or 'segfault'.
     """
     if typ == 'segfault':
-        # From python's Lib/test/crashers/bogus_code_obj.py
-        co = types.CodeType(0, 0, 0, 0, 0, b'\x04\x71\x00\x00', (), (), (),
-                            '', '', 1, b'')
-        exec(co)
+        os.kill(os.getpid(), signal.SIGSEGV)
         raise Exception("Segfault failed (wat.)")
     else:
         raise Exception("Forced crash")
@@ -158,12 +171,15 @@ def debug_console():
     try:
         con_widget = objreg.get('debug-console')
     except KeyError:
+        log.misc.debug('initializing debug console')
         con_widget = consolewidget.ConsoleWidget()
         objreg.register('debug-console', con_widget)
 
     if con_widget.isVisible():
+        log.misc.debug('hiding debug console')
         con_widget.hide()
     else:
+        log.misc.debug('showing debug console')
         con_widget.show()
 
 
@@ -234,3 +250,59 @@ def repeat_command(win_id, count=None):
     cmd = runners.last_command[mode_manager.mode]
     commandrunner = runners.CommandRunner(win_id)
     commandrunner.run(cmd[0], count if count is not None else cmd[1])
+
+
+@cmdutils.register(debug=True, name='debug-log-capacity')
+def log_capacity(capacity: int):
+    """Change the number of log lines to be stored in RAM.
+
+    Args:
+       capacity: Number of lines for the log.
+    """
+    if capacity < 0:
+        raise cmdexc.CommandError("Can't set a negative log capacity!")
+    else:
+        log.ram_handler.change_log_capacity(capacity)
+
+
+@cmdutils.register(debug=True)
+@cmdutils.argument('level', choices=sorted(
+    (level.lower() for level in log.LOG_LEVELS),
+    key=lambda e: log.LOG_LEVELS[e.upper()]))
+def debug_log_level(level: str):
+    """Change the log level for console logging.
+
+    Args:
+        level: The log level to set.
+    """
+    log.change_console_formatter(log.LOG_LEVELS[level.upper()])
+    log.console_handler.setLevel(log.LOG_LEVELS[level.upper()])
+
+
+@cmdutils.register(debug=True)
+def debug_log_filter(filters: str):
+    """Change the log filter for console logging.
+
+    Args:
+        filters: A comma separated list of logger names.
+    """
+    if set(filters.split(',')).issubset(log.LOGGER_NAMES):
+        log.console_filter.names = filters.split(',')
+    else:
+        raise cmdexc.CommandError("filters: Invalid value {} - expected one "
+                                  "of: {}".format(filters,
+                                                  ', '.join(log.LOGGER_NAMES)))
+
+
+@cmdutils.register()
+@cmdutils.argument('current_win_id', win_id=True)
+def window_only(current_win_id):
+    """Close all windows except for the current one."""
+    for win_id, window in objreg.window_registry.items():
+
+        # We could be in the middle of destroying a window here
+        if sip.isdeleted(window):
+            continue
+
+        if win_id != current_win_id:
+            window.close()

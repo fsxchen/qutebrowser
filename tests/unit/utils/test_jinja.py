@@ -24,7 +24,6 @@ import os.path
 
 import pytest
 import logging
-import jinja2
 from PyQt5.QtCore import QUrl
 
 from qutebrowser.utils import utils, jinja
@@ -34,21 +33,42 @@ from qutebrowser.utils import utils, jinja
 def patch_read_file(monkeypatch):
     """pytest fixture to patch utils.read_file."""
     real_read_file = utils.read_file
+    real_resource_filename = utils.resource_filename
 
-    def _read_file(path):
+    def _read_file(path, binary=False):
         """A read_file which returns a simple template if the path is right."""
         if path == os.path.join('html', 'test.html'):
+            assert not binary
             return """Hello {{var}}"""
         elif path == os.path.join('html', 'test2.html'):
+            assert not binary
             return """{{ resource_url('utils/testfile') }}"""
+        elif path == os.path.join('html', 'test3.html'):
+            assert not binary
+            return """{{ data_url('testfile.txt') }}"""
+        elif path == 'testfile.txt':
+            assert binary
+            return b'foo'
         elif path == os.path.join('html', 'undef.html'):
+            assert not binary
             return """{{ does_not_exist() }}"""
         elif path == os.path.join('html', 'undef_error.html'):
+            assert not binary
             return real_read_file(path)
         else:
             raise IOError("Invalid path {}!".format(path))
 
+    def _resource_filename(path):
+        if path == 'utils/testfile':
+            return real_resource_filename(path)
+        elif path == 'testfile.txt':
+            return path
+        else:
+            raise IOError("Invalid path {}!".format(path))
+
     monkeypatch.setattr('qutebrowser.utils.jinja.utils.read_file', _read_file)
+    monkeypatch.setattr('qutebrowser.utils.jinja.utils.resource_filename',
+                        _resource_filename)
 
 
 def test_simple_template():
@@ -75,11 +95,23 @@ def test_resource_url():
         assert f.read().splitlines()[0] == "Hello World!"
 
 
-def test_not_found():
+def test_data_url():
+    """Test data_url() which can be used from templates."""
+    data = jinja.render('test3.html')
+    print(data)
+    url = QUrl(data)
+    assert url.isValid()
+    assert data == 'data:text/plain;base64,Zm9v'  # 'foo'
+
+
+def test_not_found(caplog):
     """Test with a template which does not exist."""
-    with pytest.raises(jinja2.TemplateNotFound) as excinfo:
-        jinja.render('does_not_exist.html')
-    assert str(excinfo.value) == 'does_not_exist.html'
+    with caplog.at_level(logging.ERROR):
+        data = jinja.render('does_not_exist.html')
+    assert "The does_not_exist.html template could not be found!" in data
+
+    assert caplog.records[0].msg.startswith("The does_not_exist.html template"
+                                            " could not be loaded from")
 
 
 def test_utf8():

@@ -23,15 +23,31 @@ import sys
 import functools
 import xml.etree.ElementTree
 
-from PyQt5.QtCore import pyqtSlot, Qt, QEvent, QUrl, QPoint, QTimer
+from PyQt5.QtCore import (pyqtSlot, Qt, QEvent, QUrl, QPoint, QTimer, QSizeF,
+                          QSize)
 from PyQt5.QtGui import QKeyEvent
-from PyQt5.QtWebKitWidgets import QWebPage
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWebKitWidgets import QWebPage, QWebFrame
 from PyQt5.QtWebKit import QWebSettings
 from PyQt5.QtPrintSupport import QPrinter
 
 from qutebrowser.browser import browsertab
-from qutebrowser.browser.webkit import webview, tabhistory
-from qutebrowser.utils import qtutils, objreg, usertypes, utils
+from qutebrowser.browser.network import proxy
+from qutebrowser.browser.webkit import webview, tabhistory, webkitelem
+from qutebrowser.browser.webkit.network import webkitqutescheme
+from qutebrowser.utils import qtutils, objreg, usertypes, utils, log
+
+
+def init():
+    """Initialize QtWebKit-specific modules."""
+    qapp = QApplication.instance()
+
+    log.init.debug("Initializing proxy...")
+    proxy.init()
+
+    log.init.debug("Initializing js-bridge...")
+    js_bridge = webkitqutescheme.JSBridge(qapp)
+    objreg.register('js-bridge', js_bridge)
 
 
 class WebKitPrinting(browsertab.AbstractPrinting):
@@ -314,7 +330,7 @@ class WebKitCaret(browsertab.AbstractCaret):
         if QWebSettings.globalSettings().testAttribute(
                 QWebSettings.JavascriptEnabled):
             if tab:
-                self._widget.page().open_target = usertypes.ClickTarget.tab
+                self._tab.data.override_target = usertypes.ClickTarget.tab
             self._tab.run_js_async(
                 'window.getSelection().anchorNode.parentNode.click()')
         else:
@@ -402,14 +418,15 @@ class WebKitScroller(browsertab.AbstractScroller):
 
     def _key_press(self, key, count=1, getter_name=None, direction=None):
         frame = self._widget.page().mainFrame()
-        press_evt = QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier, 0, 0, 0)
-        release_evt = QKeyEvent(QEvent.KeyRelease, key, Qt.NoModifier, 0, 0, 0)
         getter = None if getter_name is None else getattr(frame, getter_name)
 
         # FIXME:qtwebengine needed?
         # self._widget.setFocus()
 
         for _ in range(count):
+            press_evt = QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier, 0, 0, 0)
+            release_evt = QKeyEvent(QEvent.KeyRelease, key, Qt.NoModifier,
+                                    0, 0, 0)
             # Abort scrolling if the minimum/maximum was reached.
             if (getter is not None and
                     frame.scrollBarValue(direction) == getter(direction)):
@@ -490,12 +507,94 @@ class WebKitHistory(browsertab.AbstractHistory):
                     self._tab.scroller.to_point, cur_data['scroll-pos']))
 
 
+class WebKitElements(browsertab.AbstractElements):
+
+    """QtWebKit implemementations related to elements on the page."""
+
+    def find_css(self, selector, callback, *, only_visible=False):
+        mainframe = self._widget.page().mainFrame()
+        if mainframe is None:
+            raise browsertab.WebTabError("No frame focused!")
+
+        elems = []
+        frames = webkitelem.get_child_frames(mainframe)
+        for f in frames:
+            for elem in f.findAllElements(selector):
+                elems.append(webkitelem.WebKitElement(elem, tab=self._tab))
+
+        if only_visible:
+            # pylint: disable=protected-access
+            elems = [e for e in elems if e._is_visible(mainframe)]
+            # pylint: enable=protected-access
+
+        callback(elems)
+
+    def find_id(self, elem_id, callback):
+        def find_id_cb(elems):
+            if not elems:
+                callback(None)
+            else:
+                callback(elems[0])
+        self.find_css('#' + elem_id, find_id_cb)
+
+    def find_focused(self, callback):
+        frame = self._widget.page().currentFrame()
+        if frame is None:
+            callback(None)
+            return
+
+        elem = frame.findFirstElement('*:focus')
+        if elem.isNull():
+            callback(None)
+        else:
+            callback(webkitelem.WebKitElement(elem, tab=self._tab))
+
+    def find_at_pos(self, pos, callback):
+        assert pos.x() >= 0
+        assert pos.y() >= 0
+        frame = self._widget.page().frameAt(pos)
+        if frame is None:
+            # This happens when we click inside the webview, but not actually
+            # on the QWebPage - for example when clicking the scrollbar
+            # sometimes.
+            log.webview.debug("Hit test at {} but frame is None!".format(pos))
+            callback(None)
+            return
+
+        # You'd think we have to subtract frame.geometry().topLeft() from the
+        # position, but it seems QWebFrame::hitTestContent wants a position
+        # relative to the QWebView, not to the frame. This makes no sense to
+        # me, but it works this way.
+        hitresult = frame.hitTestContent(pos)
+        if hitresult.isNull():
+            # For some reason, the whole hit result can be null sometimes (e.g.
+            # on doodle menu links).
+            log.webview.debug("Hit test result is null!")
+            callback(None)
+            return
+
+        try:
+            elem = webkitelem.WebKitElement(hitresult.element(), tab=self._tab)
+        except webkitelem.IsNullError:
+            # For some reason, the hit result element can be a null element
+            # sometimes (e.g. when clicking the timetable fields on
+            # http://www.sbb.ch/ ).
+            log.webview.debug("Hit test result element is null!")
+            callback(None)
+            return
+
+        callback(elem)
+
+
 class WebKitTab(browsertab.AbstractTab):
 
     """A QtWebKit tab in the browser."""
 
+    WIDGET_CLASS = webview.WebView
+
     def __init__(self, win_id, mode_manager, parent=None):
-        super().__init__(win_id)
+        super().__init__(win_id=win_id, mode_manager=mode_manager,
+                         parent=parent)
         widget = webview.WebView(win_id, self.tab_id, tab=self)
         self.history = WebKitHistory(self)
         self.scroller = WebKitScroller(self, parent=self)
@@ -504,17 +603,24 @@ class WebKitTab(browsertab.AbstractTab):
         self.zoom = WebKitZoom(win_id=win_id, parent=self)
         self.search = WebKitSearch(parent=self)
         self.printing = WebKitPrinting()
+        self.elements = WebKitElements(self)
         self._set_widget(widget)
         self._connect_signals()
-        self.zoom.set_default()
         self.backend = usertypes.Backend.QtWebKit
+
+    def _install_event_filter(self):
+        self._widget.installEventFilter(self._mouse_event_filter)
 
     def openurl(self, url):
         self._openurl_prepare(url)
         self._widget.openurl(url)
 
-    def url(self):
-        return self._widget.url()
+    def url(self, requested=False):
+        frame = self._widget.page().mainFrame()
+        if requested:
+            return frame.requestedUrl()
+        else:
+            return frame.url()
 
     def dump_async(self, callback, *, plain=False):
         frame = self._widget.page().mainFrame()
@@ -523,13 +629,13 @@ class WebKitTab(browsertab.AbstractTab):
         else:
             callback(frame.toHtml())
 
-    def run_js_async(self, code, callback=None):
-        result = self.run_js_blocking(code)
+    def run_js_async(self, code, callback=None, *, world=None):
+        if world is not None and world != usertypes.JsWorld.jseval:
+            log.webview.warning("Ignoring world ID {}".format(world))
+        document_element = self._widget.page().mainFrame().documentElement()
+        result = document_element.evaluateJavaScript(code)
         if callback is not None:
             callback(result)
-
-    def run_js_blocking(self, code):
-        return self._widget.page().mainFrame().evaluateJavaScript(code)
 
     def icon(self):
         return self._widget.icon()
@@ -551,11 +657,19 @@ class WebKitTab(browsertab.AbstractTab):
         return self._widget.title()
 
     def clear_ssl_errors(self):
-        nam = self._widget.page().networkAccessManager()
-        nam.clear_all_ssl_errors()
+        self.networkaccessmanager().clear_all_ssl_errors()
+
+    @pyqtSlot()
+    def _on_history_trigger(self):
+        url = self.url()
+        requested_url = self.url(requested=True)
+        self.add_history_item.emit(url, requested_url, self.title())
 
     def set_html(self, html, base_url):
         self._widget.setHtml(html, base_url)
+
+    def networkaccessmanager(self):
+        return self._widget.page().networkAccessManager()
 
     @pyqtSlot()
     def _on_frame_load_finished(self):
@@ -572,6 +686,18 @@ class WebKitTab(browsertab.AbstractTab):
         """Emit iconChanged with a QIcon like QWebEngineView does."""
         self.icon_changed.emit(self._widget.icon())
 
+    @pyqtSlot(QWebFrame)
+    def _on_frame_created(self, frame):
+        """Connect the contentsSizeChanged signal of each frame."""
+        # FIXME:qtwebengine those could theoretically regress:
+        # https://github.com/The-Compiler/qutebrowser/issues/152
+        # https://github.com/The-Compiler/qutebrowser/issues/263
+        frame.contentsSizeChanged.connect(self._on_contents_size_changed)
+
+    @pyqtSlot(QSize)
+    def _on_contents_size_changed(self, size):
+        self.contents_size_changed.emit(QSizeF(size))
+
     def _connect_signals(self):
         view = self._widget
         page = view.page()
@@ -587,3 +713,9 @@ class WebKitTab(browsertab.AbstractTab):
         page.networkAccessManager().sslErrors.connect(self._on_ssl_errors)
         frame.loadFinished.connect(self._on_frame_load_finished)
         view.iconChanged.connect(self._on_webkit_icon_changed)
+        page.frameCreated.connect(self._on_frame_created)
+        frame.contentsSizeChanged.connect(self._on_contents_size_changed)
+        frame.initialLayoutCompleted.connect(self._on_history_trigger)
+
+    def _event_target(self):
+        return self._widget

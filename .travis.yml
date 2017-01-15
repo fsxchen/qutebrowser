@@ -13,10 +13,18 @@ matrix:
       env: DOCKER=archlinux
       services: docker
     - os: linux
+      env: DOCKER=archlinux QUTE_BDD_WEBENGINE=true
+      services: docker
+    - os: linux
       env: DOCKER=ubuntu-xenial
       services: docker
     - os: osx
-      env: TESTENV=py35
+      env: TESTENV=py35 OSX=elcapitan
+      osx_image: xcode7.3
+    # https://github.com/The-Compiler/qutebrowser/issues/2013
+    # - os: osx
+    #   env: TESTENV=py35 OSX=yosemite
+    #   osx_image: xcode6.4
     - os: linux
       env: TESTENV=pylint
     - os: linux
@@ -35,7 +43,9 @@ matrix:
       env: TESTENV=eslint
   allow_failures:
     - os: osx
-      env: TESTENV=py35
+      env: TESTENV=py35 OSX=elcapitan
+      osx_image: xcode7.3
+  fast_finish: true
 
 cache:
   directories:

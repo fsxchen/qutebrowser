@@ -28,6 +28,7 @@ import collections
 import functools
 import contextlib
 import itertools
+import socket
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence, QColor, QClipboard
@@ -42,9 +43,19 @@ fake_clipboard = None
 log_clipboard = False
 
 
-class SelectionUnsupportedError(Exception):
+class ClipboardError(Exception):
+
+    """Raised if the clipboard contents are unavailable for some reason."""
+
+
+class SelectionUnsupportedError(ClipboardError):
 
     """Raised if [gs]et_clipboard is used and selection=True is unsupported."""
+
+
+class ClipboardEmptyError(ClipboardError):
+
+    """Raised if get_clipboard is used and the clipboard is empty."""
 
 
 def elide(text, length):
@@ -55,6 +66,38 @@ def elide(text, length):
         return text
     else:
         return text[:length - 1] + '\u2026'
+
+
+def elide_filename(filename, length):
+    """Elide a filename to the given length.
+
+    The difference to the elide() is that the text is removed from
+    the middle instead of from the end. This preserves file name extensions.
+    Additionally, standard ASCII dots are used ("...") instead of the unicode
+    "…" (U+2026) so it works regardless of the filesystem encoding.
+
+    This function does not handle path separators.
+
+    Args:
+        filename: The filename to elide.
+        length: The maximum length of the filename, must be at least 3.
+
+    Return:
+        The elided filename.
+    """
+    elidestr = '...'
+    if length < len(elidestr):
+        raise ValueError('length must be greater or equal to 3')
+    if len(filename) <= length:
+        return filename
+    # Account for '...'
+    length -= len(elidestr)
+    left = length // 2
+    right = length - left
+    if right == 0:
+        return filename[:left] + elidestr
+    else:
+        return filename[:left] + elidestr + filename[-right:]
 
 
 def compact_text(text, elidelength=None):
@@ -229,21 +272,6 @@ def format_seconds(total_seconds):
     chunks.append(min_format.format(minutes))
     chunks.append('{:02}'.format(seconds))
     return prefix + ':'.join(chunks)
-
-
-def format_timedelta(td):
-    """Format a timedelta to get a "1h 5m 1s" string."""
-    prefix = '-' if td.total_seconds() < 0 else ''
-    hours, rem = divmod(abs(round(td.total_seconds())), 3600)
-    minutes, seconds = divmod(rem, 60)
-    chunks = []
-    if hours:
-        chunks.append('{}h'.format(hours))
-    if minutes:
-        chunks.append('{}m'.format(minutes))
-    if seconds or not chunks:
-        chunks.append('{}s'.format(seconds))
-    return prefix + ' '.join(chunks)
 
 
 def format_size(size, base=1024, suffix=''):
@@ -777,9 +805,23 @@ def get_clipboard(selection=False):
         mode = QClipboard.Selection if selection else QClipboard.Clipboard
         data = QApplication.clipboard().text(mode=mode)
 
+    target = "Primary selection" if selection else "Clipboard"
+    if not data.strip():
+        raise ClipboardEmptyError("{} is empty.".format(target))
+    log.misc.debug("{} contained: {!r}".format(target, data))
+
     return data
 
 
 def supports_selection():
     """Check if the OS supports primary selection."""
     return QApplication.clipboard().supportsSelection()
+
+
+def random_port():
+    """Get a random free port."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(('localhost', 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port

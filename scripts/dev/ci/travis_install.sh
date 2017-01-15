@@ -54,7 +54,7 @@ brew_install() {
 
 pip_install() {
     # this uses python2
-    travis_retry sudo -H python -m pip install -r misc/requirements/requirements-$1.txt
+    travis_retry sudo -H python -m pip install "$@"
 }
 
 npm_install() {
@@ -88,29 +88,31 @@ if [[ $DOCKER ]]; then
 elif [[ $TRAVIS_OS_NAME == osx ]]; then
     # Disable App Nap
     defaults write NSGlobalDomain NSAppSleepDisabled -bool YES
-    curl -LO https://github.com/The-Compiler/homebrew-qt5-webkit/releases/download/v5.6.0-1/pyqt5-5.6.el_capitan.bottle.1.tar.gz
-    curl -LO https://github.com/The-Compiler/homebrew-qt5-webkit/releases/download/v5.6.1_1-1/qt5-5.6.1-1.yosemite.bottle.1.tar.gz
+
+    curl -LO https://bootstrap.pypa.io/get-pip.py
+    sudo -H python get-pip.py
+
     brew --version
-    brew_install python3 {qt5,pyqt5}-*.bottle.1.tar.gz
-    pip_install pip
-    pip_install tox
+    brew_install python3 qt5 pyqt5
+
+    pip_install -r misc/requirements/requirements-tox.txt
     pip --version
     tox --version
     check_pyqt
     exit 0
 fi
 
-pyqt_pkgs="python3-pyqt5 python3-pyqt5.qtwebkit"
+pyqt_pkgs="python3-pyqt5 python3-pyqt5.qtquick python3-pyqt5.qtwebkit"
 
 pip_install pip
-pip_install tox
+pip_install -r misc/requirements/requirements-tox.txt
 
 pip --version
 tox --version
 
 case $TESTENV in
     py34-cov)
-        pip_install codecov
+        pip_install -r misc/requirements/requirements-codecov.txt
         apt_install xvfb $pyqt_pkgs libpython3.4-dev
         check_pyqt
         ;;

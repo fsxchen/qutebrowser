@@ -22,34 +22,13 @@
 
 import pytest
 
-from PyQt5.QtCore import QObject, pyqtSignal
-from PyQt5.QtWebKit import QWebSettings
-
-
-class WebEngineJSChecker(QObject):
-
-    """Check if a JS value provided by a callback is the expected one."""
-
-    got_result = pyqtSignal(object)
-
-    def __init__(self, qtbot, parent=None):
-        super().__init__(parent)
-        self._qtbot = qtbot
-
-    def callback(self, result):
-        """Callback which can be passed to runJavaScript."""
-        self.got_result.emit(result)
-
-    def check(self, expected):
-        """Wait until the JS result arrived and compare it."""
-        with self._qtbot.waitSignal(self.got_result) as blocker:
-            pass
-        assert blocker.args == [expected]
-
 
 @pytest.mark.parametrize('js_enabled, expected', [(True, 2.0), (False, None)])
 def test_simple_js_webkit(webview, js_enabled, expected):
     """With QtWebKit, evaluateJavaScript works when JS is on."""
+    # If we get there (because of the webengineview fixture) we can be certain
+    # QtWebKit is available
+    from PyQt5.QtWebKit import QWebSettings
     webview.settings().setAttribute(QWebSettings.JavascriptEnabled, js_enabled)
     result = webview.page().mainFrame().evaluateJavaScript('1 + 1')
     assert result == expected
@@ -58,15 +37,19 @@ def test_simple_js_webkit(webview, js_enabled, expected):
 @pytest.mark.parametrize('js_enabled, expected', [(True, 2.0), (False, 2.0)])
 def test_element_js_webkit(webview, js_enabled, expected):
     """With QtWebKit, evaluateJavaScript on an element works with JS off."""
+    # If we get there (because of the webengineview fixture) we can be certain
+    # QtWebKit is available
+    from PyQt5.QtWebKit import QWebSettings
     webview.settings().setAttribute(QWebSettings.JavascriptEnabled, js_enabled)
     elem = webview.page().mainFrame().documentElement()
     result = elem.evaluateJavaScript('1 + 1')
     assert result == expected
 
 
-@pytest.mark.usefixtures('redirect_xdg_data')
+@pytest.mark.usefixtures('redirect_webengine_data')
 @pytest.mark.parametrize('js_enabled, expected', [(True, 2.0), (False, 2.0)])
-def test_simple_js_webengine(qtbot, webengineview, js_enabled, expected):
+def test_simple_js_webengine(callback_checker, webengineview, js_enabled,
+                             expected):
     """With QtWebEngine, runJavaScript works even when JS is off."""
     # pylint: disable=no-name-in-module,useless-suppression
     # If we get there (because of the webengineview fixture) we can be certain
@@ -75,6 +58,5 @@ def test_simple_js_webengine(qtbot, webengineview, js_enabled, expected):
     webengineview.settings().setAttribute(QWebEngineSettings.JavascriptEnabled,
                                           js_enabled)
 
-    checker = WebEngineJSChecker(qtbot)
-    webengineview.page().runJavaScript('1 + 1', checker.callback)
-    checker.check(expected)
+    webengineview.page().runJavaScript('1 + 1', callback_checker.callback)
+    callback_checker.check(expected)

@@ -21,6 +21,7 @@
 import os
 import zipfile
 import shutil
+import logging
 
 import pytest
 
@@ -28,7 +29,6 @@ from PyQt5.QtCore import pyqtSignal, QUrl, QObject
 
 from qutebrowser.browser import adblock
 from qutebrowser.utils import objreg
-from qutebrowser.commands import cmdexc
 
 pytestmark = pytest.mark.usefixtures('qapp', 'config_tmpdir')
 
@@ -96,14 +96,15 @@ class FakeDownloadManager:
         return download_item
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def download_stub(win_registry):
     """Register a FakeDownloadManager."""
     stub = FakeDownloadManager()
-    objreg.register('download-manager', stub,
+    objreg.register('qtnetwork-download-manager', stub,
                     scope='window', window='last-focused')
     yield
-    objreg.delete('download-manager', scope='window', window='last-focused')
+    objreg.delete('qtnetwork-download-manager', scope='window',
+                  window='last-focused')
 
 
 def create_zipfile(directory, files, zipname='test'):
@@ -223,34 +224,8 @@ def generic_blocklists(directory):
     return [blocklist1, blocklist2, blocklist3, blocklist4, blocklist5]
 
 
-def test_without_datadir(config_stub, tmpdir, monkeypatch, win_registry):
-    """No directory for data configured so no hosts file exists.
-
-    Ensure CommandError is raised and no URL is blocked.
-    """
-    config_stub.data = {
-        'content': {
-            'host-block-lists': generic_blocklists(tmpdir),
-            'host-blocking-enabled': True,
-        }
-    }
-    monkeypatch.setattr('qutebrowser.utils.standarddir.data', lambda: None)
-    host_blocker = adblock.HostBlocker()
-
-    with pytest.raises(cmdexc.CommandError) as excinfo:
-        host_blocker.adblock_update(0)
-    assert str(excinfo.value) == "No data storage is configured!"
-
-    host_blocker.read_hosts()
-    for str_url in URLS_TO_CHECK:
-        assert not host_blocker.is_blocked(QUrl(str_url))
-
-    # To test on_config_changed
-    config_stub.set('content', 'host-block-lists', None)
-
-
 def test_disabled_blocking_update(basedir, config_stub, download_stub,
-                                  data_tmpdir, tmpdir, win_registry):
+                                  data_tmpdir, tmpdir, win_registry, caplog):
     """Ensure no URL is blocked when host blocking is disabled."""
     config_stub.data = {
         'content': {
@@ -259,10 +234,11 @@ def test_disabled_blocking_update(basedir, config_stub, download_stub,
         }
     }
     host_blocker = adblock.HostBlocker()
-    host_blocker.adblock_update(0)
+    host_blocker.adblock_update()
     while host_blocker._in_progress:
         current_download = host_blocker._in_progress[0]
-        current_download.finished.emit()
+        with caplog.at_level(logging.ERROR):
+            current_download.finished.emit()
     host_blocker.read_hosts()
     for str_url in URLS_TO_CHECK:
         assert not host_blocker.is_blocked(QUrl(str_url))
@@ -278,14 +254,14 @@ def test_no_blocklist_update(config_stub, download_stub,
         }
     }
     host_blocker = adblock.HostBlocker()
-    host_blocker.adblock_update(0)
+    host_blocker.adblock_update()
     host_blocker.read_hosts()
     for str_url in URLS_TO_CHECK:
         assert not host_blocker.is_blocked(QUrl(str_url))
 
 
 def test_successful_update(config_stub, basedir, download_stub,
-                           data_tmpdir, tmpdir, win_registry):
+                           data_tmpdir, tmpdir, win_registry, caplog):
     """Ensure hosts from host-block-lists are blocked after an update."""
     config_stub.data = {
         'content': {
@@ -295,17 +271,18 @@ def test_successful_update(config_stub, basedir, download_stub,
         }
     }
     host_blocker = adblock.HostBlocker()
-    host_blocker.adblock_update(0)
+    host_blocker.adblock_update()
     # Simulate download is finished
     while host_blocker._in_progress:
         current_download = host_blocker._in_progress[0]
-        current_download.finished.emit()
+        with caplog.at_level(logging.ERROR):
+            current_download.finished.emit()
     host_blocker.read_hosts()
     assert_urls(host_blocker, whitelisted=[])
 
 
 def test_failed_dl_update(config_stub, basedir, download_stub,
-                          data_tmpdir, tmpdir, win_registry):
+                          data_tmpdir, tmpdir, win_registry, caplog):
     """One blocklist fails to download.
 
     Ensure hosts from this list are not blocked.
@@ -323,13 +300,14 @@ def test_failed_dl_update(config_stub, basedir, download_stub,
         }
     }
     host_blocker = adblock.HostBlocker()
-    host_blocker.adblock_update(0)
+    host_blocker.adblock_update()
     while host_blocker._in_progress:
         current_download = host_blocker._in_progress[0]
         # if current download is the file we want to fail, make it fail
         if current_download.name == dl_fail_blocklist.path():
             current_download.successful = False
-        current_download.finished.emit()
+        with caplog.at_level(logging.ERROR):
+            current_download.finished.emit()
     host_blocker.read_hosts()
     assert_urls(host_blocker, whitelisted=[])
 

@@ -23,6 +23,7 @@ import sys
 import json
 
 import qutebrowser
+from qutebrowser.utils import log
 try:
     from qutebrowser.misc.checkpyver import check_python_version
 except ImportError:
@@ -46,14 +47,7 @@ def get_argparser():
     """Get the argparse parser."""
     parser = argparse.ArgumentParser(prog='qutebrowser',
                                      description=qutebrowser.__description__)
-    parser.add_argument('-c', '--confdir', help="Set config directory (empty "
-                        "for no config storage).")
-    parser.add_argument('--datadir', help="Set data directory (empty for "
-                        "no data storage).")
-    parser.add_argument('--cachedir', help="Set cache directory (empty for "
-                        "no cache storage).")
-    parser.add_argument('--basedir', help="Base directory for all storage. "
-                        "Other --*dir arguments are ignored if this is given.")
+    parser.add_argument('--basedir', help="Base directory for all storage.")
     parser.add_argument('-V', '--version', help="Show version and quit.",
                         action='store_true')
     parser.add_argument('-s', '--set', help="Set a temporary setting for "
@@ -72,6 +66,12 @@ def get_argparser():
     parser.add_argument('--backend', choices=['webkit', 'webengine'],
                         help="Which backend to use (webengine backend is "
                              "EXPERIMENTAL!).", default='webkit')
+    parser.add_argument('--enable-webengine-inspector', action='store_true',
+                        help="Enable the web inspector for QtWebEngine. Note "
+                        "that this is a SECURITY RISK and you should not "
+                        "visit untrusted websites with the inspector turned "
+                        "on. See https://bugreports.qt.io/browse/QTBUG-50725 "
+                        "for more details.")
 
     parser.add_argument('--json-args', help=argparse.SUPPRESS)
     parser.add_argument('--temp-basedir-restarted', help=argparse.SUPPRESS)
@@ -81,7 +81,7 @@ def get_argparser():
                        help="Set loglevel", default='info',
                        choices=['critical', 'error', 'warning', 'info',
                                 'debug', 'vdebug'])
-    debug.add_argument('--logfilter',
+    debug.add_argument('--logfilter', type=logfilter_error,
                        help="Comma-separated list of things to be logged "
                        "to the debug log on stdout.")
     debug.add_argument('--loglines',
@@ -111,32 +111,38 @@ def get_argparser():
                        "temporary basedir.")
     debug.add_argument('--no-err-windows', action='store_true', help="Don't "
                        "show any error windows (used for tests/smoke.py).")
-    # For the Qt args, we use store_const with const=True rather than
-    # store_true because we want the default to be None, to make
-    # utils.qt:get_args easier.
-    debug.add_argument('--qt-name', help="Set the window name.",
-                       metavar='NAME')
-    debug.add_argument('--qt-style', help="Set the Qt GUI style to use.",
-                       metavar='STYLE')
-    debug.add_argument('--qt-stylesheet', help="Override the Qt application "
-                       "stylesheet.", metavar='STYLESHEET')
-    debug.add_argument('--qt-widgetcount', help="Print debug message at the "
-                       "end about number of widgets left undestroyed and "
-                       "maximum number of widgets existed at the same time.",
-                       action='store_const', const=True)
-    debug.add_argument('--qt-reverse', help="Set the application's layout "
-                       "direction to right-to-left.", action='store_const',
-                       const=True)
-    debug.add_argument('--qt-qmljsdebugger', help="Activate the QML/JS "
-                       "debugger with a specified port. 'block' is optional "
-                       "and will make the application wait until a debugger "
-                       "connects to it.", metavar='port:PORT[,block]')
+    debug.add_argument('--qt-arg', help="Pass an argument with a value to Qt. "
+                       "For example, you can do "
+                       "`--qt-arg geometry 650x555+200+300` to set the window "
+                       "geometry.", nargs=2, metavar=('NAME', 'VALUE'),
+                       action='append')
+    debug.add_argument('--qt-flag', help="Pass an argument to Qt as flag.",
+                       nargs=1, action='append')
     parser.add_argument('command', nargs='*', help="Commands to execute on "
                         "startup.", metavar=':command')
     # URLs will actually be in command
     parser.add_argument('url', nargs='*', help="URLs to open on startup "
                         "(empty as a window separator).")
     return parser
+
+
+def directory(arg):
+    if not arg:
+        raise argparse.ArgumentTypeError("Invalid empty value")
+
+
+def logfilter_error(logfilter: str):
+    """Validate logger names passed to --logfilter.
+
+    Args:
+        logfilter: A comma separated list of logger names.
+    """
+    if set(logfilter.split(',')).issubset(log.LOGGER_NAMES):
+        return logfilter
+    else:
+        raise argparse.ArgumentTypeError(
+            "filters: Invalid value {} - expected a list of: {}".format(
+                logfilter, ', '.join(log.LOGGER_NAMES)))
 
 
 def main():

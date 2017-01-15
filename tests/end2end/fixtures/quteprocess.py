@@ -36,8 +36,7 @@ import pytest
 from PyQt5.QtCore import pyqtSignal, QUrl
 
 from qutebrowser.misc import ipc
-from qutebrowser.utils import log, utils
-from qutebrowser.browser.webkit import webelem
+from qutebrowser.utils import log, utils, javascript
 from helpers import utils as testutils
 from end2end.fixtures import testprocess
 
@@ -47,13 +46,23 @@ instance_counter = itertools.count()
 
 def is_ignored_qt_message(message):
     """Check if the message is listed in qt_log_ignore."""
-    # pylint: disable=no-member
-    # WORKAROUND for https://bitbucket.org/logilab/pylint/issues/717/
-    # we should switch to generated-members after that
     regexes = pytest.config.getini('qt_log_ignore')
     for regex in regexes:
         if re.match(regex, message):
             return True
+    return False
+
+
+def is_ignored_lowlevel_message(message):
+    """Check if we want to ignore a lowlevel process output."""
+    if 'Running without the SUID sandbox!' in message:
+        return True
+    elif message.startswith('Xlib: sequence lost'):
+        # https://travis-ci.org/The-Compiler/qutebrowser/jobs/157941720
+        # ???
+        return True
+    elif 'CERT_PKIXVerifyCert for localhost failed' in message:
+        return True
     return False
 
 
@@ -73,8 +82,11 @@ class LogLine(testprocess.Line):
             line = json.loads(data)
         except ValueError:
             raise testprocess.InvalidLine(data)
+        if not isinstance(line, dict):
+            raise testprocess.InvalidLine(data)
 
         self.timestamp = datetime.datetime.fromtimestamp(line['created'])
+        self.msecs = line['msecs']
         self.loglevel = line['levelno']
         self.levelname = line['levelname']
         self.category = line['name']
@@ -84,12 +96,7 @@ class LogLine(testprocess.Line):
         if self.function is None and self.line == 0:
             self.line = None
         self.traceback = line.get('traceback')
-
-        self.full_message = line['message']
-        msg_match = re.match(r'^(\[(?P<prefix>\d+s ago)\] )?(?P<message>.*)',
-                             self.full_message, re.DOTALL)
-        self.prefix = msg_match.group('prefix')
-        self.message = msg_match.group('message')
+        self.message = line['message']
 
         self.expected = is_ignored_qt_message(self.message)
         self.use_color = False
@@ -111,10 +118,13 @@ class LogLine(testprocess.Line):
         if self.line is None:
             r.line = 0
         r.created = self.timestamp.timestamp()
+        r.msecs = self.msecs
         r.module = self.module
         r.funcName = self.function
 
         format_str = log.EXTENDED_FMT
+        format_str = format_str.replace('{asctime:8}',
+                                        '{asctime:8}.{msecs:03.0f}')
         # Mark expected errors with (expected) so it's less confusing for tests
         # which expect errors but fail due to other errors.
         if self.expected and self.loglevel > logging.INFO:
@@ -139,17 +149,14 @@ class QuteProc(testprocess.Process):
     """A running qutebrowser process used for tests.
 
     Attributes:
-        _delay: Delay to wait between commands.
         _ipc_socket: The IPC socket of the started instance.
-        _httpbin: The HTTPBin webserver.
         _webengine: Whether to use QtWebEngine
         basedir: The base directory for this instance.
+        request: The request object for the current test.
         _focus_ready: Whether the main window got focused.
         _load_ready: Whether the about:blank page got loaded.
-        _profile: If True, do profiling of the subprocesses.
         _instance_id: A unique ID for this QuteProc instance
         _run_counter: A counter to get a unique ID for each run.
-        _config: The pytest config object
 
     Signals:
         got_error: Emitted when there was an error log line.
@@ -160,20 +167,15 @@ class QuteProc(testprocess.Process):
     KEYS = ['timestamp', 'loglevel', 'category', 'module', 'function', 'line',
             'message']
 
-    def __init__(self, httpbin, delay, *, webengine=False, profile=False,
-                 config=None, parent=None):
+    def __init__(self, request, *, parent=None):
         super().__init__(parent)
-        self._webengine = webengine
-        self._profile = profile
-        self._delay = delay
-        self._httpbin = httpbin
         self._ipc_socket = None
         self.basedir = None
         self._focus_ready = False
         self._load_ready = False
         self._instance_id = next(instance_counter)
         self._run_counter = itertools.count()
-        self._config = config
+        self.request = request
 
     def _is_ready(self, what):
         """Called by _parse_line if loading/focusing is done.
@@ -189,20 +191,8 @@ class QuteProc(testprocess.Process):
         if self._load_ready and self._focus_ready:
             self.ready.emit()
 
-    def _parse_line(self, line):
-        try:
-            log_line = LogLine(line)
-        except testprocess.InvalidLine:
-            if not line.strip():
-                return None
-            elif is_ignored_qt_message(line):
-                return None
-            else:
-                raise
-
-        log_line.use_color = self._config.getoption('--color') != 'no'
-        self._log(log_line)
-
+    def _process_line(self, log_line):
+        """Check if the line matches any initial lines we're interested in."""
         start_okay_message_load = (
             "load status for <qutebrowser.browser.* tab_id=0 "
             "url='about:blank'>: LoadStatus.success")
@@ -220,6 +210,8 @@ class QuteProc(testprocess.Process):
         elif (log_line.category == 'webview' and
               testutils.pattern_match(pattern=start_okay_message_load,
                                       value=log_line.message)):
+            if not self._load_ready:
+                log_line.waited_for = True
             self._is_ready('load')
         elif (log_line.category == 'misc' and
               testutils.pattern_match(pattern=start_okay_message_focus,
@@ -237,18 +229,36 @@ class QuteProc(testprocess.Process):
         elif self._is_error_logline(log_line):
             self.got_error.emit()
 
+    def _parse_line(self, line):
+        try:
+            log_line = LogLine(line)
+        except testprocess.InvalidLine:
+            if not line.strip():
+                return None
+            elif (is_ignored_qt_message(line) or
+                  is_ignored_lowlevel_message(line)):
+                return None
+            else:
+                raise
+
+        log_line.use_color = self.request.config.getoption('--color') != 'no'
+        verbose = self.request.config.getoption('--verbose')
+        if log_line.loglevel > logging.VDEBUG or verbose:
+            self._log(log_line)
+        self._process_line(log_line)
         return log_line
 
     def _executable_args(self):
+        profile = self.request.config.getoption('--qute-profile-subprocs')
         if hasattr(sys, 'frozen'):
-            if self._profile:
+            if profile:
                 raise Exception("Can't profile with sys.frozen!")
             executable = os.path.join(os.path.dirname(sys.executable),
                                       'qutebrowser')
             args = []
         else:
             executable = sys.executable
-            if self._profile:
+            if profile:
                 profile_dir = os.path.join(os.getcwd(), 'prof')
                 profile_id = '{}_{}'.format(self._instance_id,
                                             next(self._run_counter))
@@ -262,13 +272,14 @@ class QuteProc(testprocess.Process):
                         '--profile-tool', 'none',
                         '--profile-file', profile_file]
             else:
-                args = ['-m', 'qutebrowser']
+                args = ['-bb', '-m', 'qutebrowser']
         return executable, args
 
     def _default_args(self):
-        backend = 'webengine' if self._webengine else 'webkit'
+        backend = 'webengine' if self.request.config.webengine else 'webkit'
         return ['--debug', '--no-err-windows', '--temp-basedir',
-                '--json-logging', '--backend', backend, 'about:blank']
+                '--json-logging', '--loglevel', 'vdebug',
+                '--backend', backend, 'about:blank']
 
     def path_to_url(self, path, *, port=None, https=False):
         """Get a URL based on a filename for the localhost webserver.
@@ -279,9 +290,10 @@ class QuteProc(testprocess.Process):
         if path.startswith('about:') or path.startswith('qute:'):
             return path
         else:
+            httpbin = self.request.getfixturevalue('httpbin')
             return '{}://localhost:{}/{}'.format(
                 'https' if https else 'http',
-                self._httpbin.port if port is None else port,
+                httpbin.port if port is None else port,
                 path if path != '/' else '')
 
     def wait_for_js(self, message):
@@ -290,9 +302,49 @@ class QuteProc(testprocess.Process):
         Return:
             The LogLine.
         """
-        return self.wait_for(category='js',
+        line = self.wait_for(category='js',
                              function='javaScriptConsoleMessage',
                              message='[*] {}'.format(message))
+        line.expected = True
+        return line
+
+    def wait_scroll_pos_changed(self, x=None, y=None):
+        """Wait until a "Scroll position changed" message was found.
+
+        With QtWebEngine, on older Qt versions which lack
+        QWebEnginePage.scrollPositionChanged, this also skips the test.
+        """
+        __tracebackhide__ = (lambda e:
+                             e.errisinstance(testprocess.WaitForTimeout))
+        if (x is None and y is not None) or (y is None and x is not None):
+            raise ValueError("Either both x/y or neither must be given!")
+
+        if self.request.config.webengine:
+            # pylint: disable=no-name-in-module,useless-suppression
+            from PyQt5.QtWebEngineWidgets import QWebEnginePage
+            # pylint: enable=no-name-in-module,useless-suppression
+            if not hasattr(QWebEnginePage, 'scrollPositionChanged'):
+                # Qt < 5.7
+                pytest.skip("QWebEnginePage.scrollPositionChanged missing")
+        if x is None and y is None:
+            point = 'PyQt5.QtCore.QPoint(*, *)'  # not counting 0/0 here
+        elif x == '0' and y == '0':
+            point = 'PyQt5.QtCore.QPoint()'
+        else:
+            point = 'PyQt5.QtCore.QPoint({}, {})'.format(x, y)
+        self.wait_for(category='webview',
+                      message='Scroll position changed to ' + point)
+
+    def wait_for(self, timeout=None, **kwargs):
+        """Extend wait_for to add divisor if a test is xfailing."""
+        __tracebackhide__ = (lambda e:
+                             e.errisinstance(testprocess.WaitForTimeout))
+        xfail = self.request.node.get_marker('xfail')
+        if xfail and xfail.args[0]:
+            kwargs['divisor'] = 10
+        else:
+            kwargs['divisor'] = 1
+        return super().wait_for(timeout=timeout, **kwargs)
 
     def _is_error_logline(self, msg):
         """Check if the given LogLine is some kind of error message."""
@@ -328,26 +380,29 @@ class QuteProc(testprocess.Process):
         """Adjust some qutebrowser settings after starting."""
         settings = [
             ('ui', 'message-timeout', '0'),
-            ('network', 'ssl-strict', 'false'),
             ('general', 'auto-save-interval', '0'),
+            ('general', 'new-instance-open-target.window', 'last-opened')
         ]
+        if not self.request.config.webengine:
+            settings.append(('network', 'ssl-strict', 'false'))
+
         for sect, opt, value in settings:
             self.set_setting(sect, opt, value)
 
-    def after_test(self, did_fail):
-        """Handle unexpected/skip logging and clean up after each test.
-
-        Args:
-            did_fail: Set if the main test failed already, then logged errors
-                      are ignored.
-        """
-        __tracebackhide__ = True
+    def after_test(self):
+        """Handle unexpected/skip logging and clean up after each test."""
+        __tracebackhide__ = lambda e: e.errisinstance(pytest.fail.Exception)
         bad_msgs = [msg for msg in self._data
                     if self._is_error_logline(msg) and not msg.expected]
 
-        if did_fail:
-            super().after_test()
-            return
+        try:
+            call = self.request.node.rep_call
+        except AttributeError:
+            pass
+        else:
+            if call.failed or hasattr(call, 'wasxfail'):
+                super().after_test()
+                return
 
         try:
             if bad_msgs:
@@ -360,6 +415,16 @@ class QuteProc(testprocess.Process):
                 self._maybe_skip()
         finally:
             super().after_test()
+
+    def send_ipc(self, commands, target_arg=''):
+        """Send a raw command to the running IPC socket."""
+        delay = self.request.config.getoption('--qute-delay')
+        time.sleep(delay / 1000)
+
+        assert self._ipc_socket is not None
+        ipc.send_to_running_instance(self._ipc_socket, commands, target_arg)
+        self.wait_for(category='ipc', module='ipc', function='on_ready_read',
+                      message='Read from socket *')
 
     def send_cmd(self, command, count=None, invalid=False, *, escape=True):
         """Send a command to the running qutebrowser instance.
@@ -375,18 +440,14 @@ class QuteProc(testprocess.Process):
             summary += ' (count {})'.format(count)
         self.log_summary(summary)
 
-        assert self._ipc_socket is not None
-
-        time.sleep(self._delay / 1000)
-
         if escape:
             command = command.replace('\\', r'\\')
 
         if count is not None:
-            command = ':{}:{}'.format(count, command.lstrip(':'))
+            command = ':run-with-count {} {}'.format(count,
+                                                     command.lstrip(':'))
 
-        ipc.send_to_running_instance(self._ipc_socket, [command],
-                                     target_arg='')
+        self.send_ipc([command])
         if not invalid:
             self.wait_for(category='commands', module='command',
                           function='run', message='command called: *')
@@ -414,19 +475,26 @@ class QuteProc(testprocess.Process):
         yield
         self.set_setting(sect, opt, old_value)
 
-    def open_path(self, path, *, new_tab=False, new_window=False, port=None,
-                  https=False, wait=True):
+    def open_path(self, path, *, new_tab=False, new_bg_tab=False,
+                  new_window=False, as_url=False, port=None, https=False,
+                  wait=True):
         """Open the given path on the local webserver in qutebrowser."""
         url = self.path_to_url(path, port=port, https=https)
-        self.open_url(url, new_tab=new_tab, new_window=new_window, wait=wait)
+        self.open_url(url, new_tab=new_tab, new_bg_tab=new_bg_tab,
+                      new_window=new_window, as_url=as_url, wait=wait)
 
-    def open_url(self, url, *, new_tab=False, new_window=False, wait=True):
+    def open_url(self, url, *, new_tab=False, new_bg_tab=False,
+                 new_window=False, as_url=False, wait=True):
         """Open the given url in qutebrowser."""
         if new_tab and new_window:
             raise ValueError("new_tab and new_window given!")
 
-        if new_tab:
+        if as_url:
+            self.send_cmd(url, invalid=True)
+        elif new_tab:
             self.send_cmd(':open -t ' + url)
+        elif new_bg_tab:
+            self.send_cmd(':open -b ' + url)
         elif new_window:
             self.send_cmd(':open -w ' + url)
         else:
@@ -444,7 +512,8 @@ class QuteProc(testprocess.Process):
     def wait_for_load_finished_url(self, url, *, timeout=None,
                                    load_status='success'):
         """Wait until a URL has finished loading."""
-        __tracebackhide__ = True
+        __tracebackhide__ = (lambda e: e.errisinstance(
+            testprocess.WaitForTimeout))
 
         if timeout is None:
             if 'CI' in os.environ:
@@ -476,7 +545,8 @@ class QuteProc(testprocess.Process):
     def wait_for_load_finished(self, path, *, port=None, https=False,
                                timeout=None, load_status='success'):
         """Wait until a path has finished loading."""
-        __tracebackhide__ = True
+        __tracebackhide__ = (lambda e: e.errisinstance(
+            testprocess.WaitForTimeout))
         url = self.path_to_url(path, port=port, https=https)
         self.wait_for_load_finished_url(url, timeout=timeout,
                                         load_status=load_status)
@@ -514,7 +584,7 @@ class QuteProc(testprocess.Process):
         """Press the given keys using :fake-key."""
         self.send_cmd(':fake-key -g "{}"'.format(keys))
 
-    def click_element(self, text):
+    def click_element_by_text(self, text):
         """Click the element with the given text."""
         # Use Javascript and XPath to find the right element, use console.log
         # to return an error (no element found, ambiguous element)
@@ -525,7 +595,7 @@ class QuteProc(testprocess.Process):
             'else if (_es.snapshotLength > 1) {{ console.log("qute:ambiguous '
             'elems") }} '
             'else {{ console.log("qute:okay"); _es.snapshotItem(0).click() }}'
-        ).format(text=webelem.javascript_escape(_xpath_escape(text)))
+        ).format(text=javascript.string_escape(_xpath_escape(text)))
         self.send_cmd(':jseval ' + script, escape=False)
         message = self.wait_for_js('qute:*').message
         if message.endswith('qute:no elems'):
@@ -542,7 +612,7 @@ class QuteProc(testprocess.Process):
         partial_compare is used, which means only the keys/values listed will
         be compared.
         """
-        __tracebackhide__ = True
+        __tracebackhide__ = lambda e: e.errisinstance(pytest.fail.Exception)
         # Translate ... to ellipsis in YAML.
         loader = yaml.SafeLoader(expected)
         loader.add_constructor('!ellipsis', lambda loader, node: ...)
@@ -560,8 +630,8 @@ class QuteProc(testprocess.Process):
 def _xpath_escape(text):
     """Escape a string to be used in an XPath expression.
 
-    The resulting string should still be escaped with javascript_escape, to
-    prevent javascript from interpreting the quotes.
+    The resulting string should still be escaped with javascript.string_escape,
+    to prevent javascript from interpreting the quotes.
 
     This function is needed because XPath does not provide any character
     escaping mechanisms, so to get the string
@@ -586,37 +656,32 @@ def _xpath_escape(text):
     return 'concat({})'.format(', '.join(parts))
 
 
-@pytest.yield_fixture(scope='module')
+@pytest.fixture(scope='module')
 def quteproc_process(qapp, httpbin, request):
     """Fixture for qutebrowser process which is started once per file."""
-    delay = request.config.getoption('--qute-delay')
-    profile = request.config.getoption('--qute-profile-subprocs')
-    webengine = request.config.getoption('--qute-bdd-webengine')
-    proc = QuteProc(httpbin, delay, webengine=webengine, profile=profile,
-                    config=request.config)
+    # Passing request so it has an initial config
+    proc = QuteProc(request)
     proc.start()
     yield proc
     proc.terminate()
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def quteproc(quteproc_process, httpbin, request):
     """Per-test qutebrowser fixture which uses the per-file process."""
     request.node._quteproc_log = quteproc_process.captured_log
     quteproc_process.before_test()
+    quteproc_process.request = request
     yield quteproc_process
-    quteproc_process.after_test(did_fail=request.node.rep_call.failed)
+    quteproc_process.after_test()
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def quteproc_new(qapp, httpbin, request):
     """Per-test qutebrowser process to test invocations."""
-    delay = request.config.getoption('--qute-delay')
-    profile = request.config.getoption('--qute-profile-subprocs')
-    webengine = request.config.getoption('--qute-bdd-webengine')
-    proc = QuteProc(httpbin, delay, webengine=webengine, profile=profile,
-                    config=request.config)
+    proc = QuteProc(request)
     request.node._quteproc_log = proc.captured_log
     # Not calling before_test here as that would start the process
     yield proc
-    proc.after_test(did_fail=request.node.rep_call.failed)
+    proc.after_test()
+    proc.terminate()

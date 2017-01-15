@@ -23,7 +23,16 @@ import re
 
 import pytest
 
-from qutebrowser.browser.webkit import mhtml
+mhtml = pytest.importorskip('qutebrowser.browser.webkit.mhtml')
+
+
+try:
+    import cssutils
+except (ImportError, re.error):
+    # Catching re.error because cssutils in earlier releases (<= 1.0) is
+    # broken on Python 3.5
+    # See https://bitbucket.org/cthedot/cssutils/issues/52
+    cssutils = None
 
 
 @pytest.fixture(autouse=True)
@@ -78,7 +87,7 @@ def test_quoted_printable_umlauts(checker):
         Content-Type: text/plain
         Content-Transfer-Encoding: quoted-printable
 
-        Die=20s=FC=DFe=20H=FCndin=20l=E4uft=20in=20die=20H=F6hle=20des=20B=E4ren
+        Die s=FC=DFe H=FCndin l=E4uft in die H=F6hle des B=E4ren
         -----=_qute-UUID--
         """)
 
@@ -119,7 +128,7 @@ def test_file_encoded_as_base64(checker):
         Content-Type: text/plain
         Content-Transfer-Encoding: quoted-printable
 
-        Image=20file=20attached
+        Image file attached
         -----=_qute-UUID
         Content-Location: http://a.example.com/image.png
         MIME-Version: 1.0
@@ -166,56 +175,56 @@ def test_files_appear_sorted(checker):
         Content-Type: text/plain
         Content-Transfer-Encoding: quoted-printable
 
-        root=20file
+        root file
         -----=_qute-UUID
         Content-Location: http://a.example.com/
         MIME-Version: 1.0
         Content-Type: text/plain
         Content-Transfer-Encoding: quoted-printable
 
-        file=20a
+        file a
         -----=_qute-UUID
         Content-Location: http://b.example.com/
         MIME-Version: 1.0
         Content-Type: text/plain
         Content-Transfer-Encoding: quoted-printable
 
-        file=20b
+        file b
         -----=_qute-UUID
         Content-Location: http://g.example.com/
         MIME-Version: 1.0
         Content-Type: text/plain
         Content-Transfer-Encoding: quoted-printable
 
-        file=20g
+        file g
         -----=_qute-UUID
         Content-Location: http://h.example.com/
         MIME-Version: 1.0
         Content-Type: text/plain
         Content-Transfer-Encoding: quoted-printable
 
-        file=20h
+        file h
         -----=_qute-UUID
         Content-Location: http://i.example.com/
         MIME-Version: 1.0
         Content-Type: text/plain
         Content-Transfer-Encoding: quoted-printable
 
-        file=20i
+        file i
         -----=_qute-UUID
         Content-Location: http://t.example.com/
         MIME-Version: 1.0
         Content-Type: text/plain
         Content-Transfer-Encoding: quoted-printable
 
-        file=20t
+        file t
         -----=_qute-UUID
         Content-Location: http://z.example.com/
         MIME-Version: 1.0
         Content-Type: text/plain
         Content-Transfer-Encoding: quoted-printable
 
-        file=20z
+        file z
         -----=_qute-UUID--
         """)
 
@@ -242,14 +251,13 @@ def test_empty_content_type(checker):
         Content-Location: http://example.com/file
         Content-Transfer-Encoding: quoted-printable
 
-        file=20content
+        file content
         -----=_qute-UUID--
         """)
 
 
 @pytest.mark.parametrize('has_cssutils', [
-    pytest.mark.skipif(mhtml.cssutils is None,
-                       reason="requires cssutils")(True),
+    pytest.mark.skipif(cssutils is None, reason="requires cssutils")(True),
     False,
 ], ids=['with_cssutils', 'no_cssutils'])
 @pytest.mark.parametrize('inline, style, expected_urls', [
@@ -267,11 +275,34 @@ def test_empty_content_type(checker):
 def test_css_url_scanner(monkeypatch, has_cssutils, inline, style,
                          expected_urls):
     if not has_cssutils:
-        monkeypatch.setattr('qutebrowser.browser.webkit.mhtml.cssutils', None)
+        monkeypatch.setattr(mhtml, '_get_css_imports_cssutils',
+                            lambda data, inline=False: None)
     expected_urls.sort()
     urls = mhtml._get_css_imports(style, inline=inline)
     urls.sort()
     assert urls == expected_urls
+
+
+def test_quoted_printable_spaces(checker):
+    content = b' ' * 100
+    writer = mhtml.MHTMLWriter(root_content=content,
+                               content_location='localhost',
+                               content_type='text/plain')
+    writer.write_to(checker.fp)
+    checker.expect("""
+        Content-Type: multipart/related; boundary="---=_qute-UUID"
+        MIME-Version: 1.0
+
+        -----=_qute-UUID
+        Content-Location: localhost
+        MIME-Version: 1.0
+        Content-Type: text/plain
+        Content-Transfer-Encoding: quoted-printable
+
+        {}=
+        {}=20
+        -----=_qute-UUID--
+        """.format(' ' * 75, ' ' * 24))
 
 
 class TestNoCloseBytesIO:

@@ -23,8 +23,7 @@ import os
 
 from PyQt5.QtCore import QUrl
 
-from qutebrowser.browser.webkit import webelem
-from qutebrowser.utils import utils
+from qutebrowser.utils import utils, javascript
 
 
 class PDFJSNotFound(Exception):
@@ -67,7 +66,7 @@ def _generate_pdfjs_script(url):
         '  PDFJS.verbosity = PDFJS.VERBOSITY_LEVELS.info;\n'
         '  (window.PDFView || window.PDFViewerApplication).open("{url}");\n'
         '}});\n'
-    ).format(url=webelem.javascript_escape(url.toString(QUrl.FullyEncoded)))
+    ).format(url=javascript.string_escape(url.toString(QUrl.FullyEncoded)))
 
 
 def fix_urls(asset):
