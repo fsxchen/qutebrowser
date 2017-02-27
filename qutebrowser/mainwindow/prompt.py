@@ -25,7 +25,7 @@ import collections
 
 import sip
 from PyQt5.QtCore import (pyqtSlot, pyqtSignal, Qt, QTimer, QDir, QModelIndex,
-                          QItemSelectionModel, QObject)
+                          QItemSelectionModel, QObject, QEventLoop)
 from PyQt5.QtWidgets import (QWidget, QGridLayout, QVBoxLayout, QLineEdit,
                              QLabel, QFileSystemModel, QTreeView, QSizePolicy)
 
@@ -112,7 +112,7 @@ class PromptQueue(QObject):
             if not sip.isdeleted(question):
                 # the question could already be deleted, e.g. by a cancelled
                 # download. See
-                # https://github.com/The-Compiler/qutebrowser/issues/415
+                # https://github.com/qutebrowser/qutebrowser/issues/415
                 self.ask_question(question, blocking=False)
 
     def shutdown(self):
@@ -153,7 +153,7 @@ class PromptQueue(QObject):
         if self._shutting_down:
             # If we're currently shutting down we have to ignore this question
             # to avoid segfaults - see
-            # https://github.com/The-Compiler/qutebrowser/issues/95
+            # https://github.com/qutebrowser/qutebrowser/issues/95
             log.prompt.debug("Ignoring question because we're shutting down.")
             question.abort()
             return None
@@ -184,7 +184,7 @@ class PromptQueue(QObject):
             question.completed.connect(loop.quit)
             question.completed.connect(loop.deleteLater)
             log.prompt.debug("Starting loop.exec_() for {}".format(question))
-            loop.exec_()
+            loop.exec_(QEventLoop.ExcludeSocketNotifiers)
             log.prompt.debug("Ending loop.exec_() for {}".format(question))
 
             log.prompt.debug("Restoring old question {}".format(old_question))

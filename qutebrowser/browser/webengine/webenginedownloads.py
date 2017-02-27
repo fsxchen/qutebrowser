@@ -30,7 +30,7 @@ from PyQt5.QtWebEngineWidgets import QWebEngineDownloadItem
 # pylint: enable=no-name-in-module,import-error,useless-suppression
 
 from qutebrowser.browser import downloads
-from qutebrowser.utils import debug, usertypes, message, log
+from qutebrowser.utils import debug, usertypes, message, log, qtutils
 
 
 class DownloadItem(downloads.AbstractDownloadItem):
@@ -47,6 +47,11 @@ class DownloadItem(downloads.AbstractDownloadItem):
         qt_item.downloadProgress.connect(self.stats.on_download_progress)
         qt_item.stateChanged.connect(self._on_state_changed)
 
+    def _is_page_download(self):
+        """Check if this item is a page (i.e. mhtml) download."""
+        return (self._qt_item.savePageFormat() !=
+                QWebEngineDownloadItem.UnknownSaveFormat)
+
     @pyqtSlot(QWebEngineDownloadItem.DownloadState)
     def _on_state_changed(self, state):
         state_name = debug.qenum_key(QWebEngineDownloadItem, state)
@@ -59,6 +64,9 @@ class DownloadItem(downloads.AbstractDownloadItem):
             pass
         elif state == QWebEngineDownloadItem.DownloadCompleted:
             log.downloads.debug("Download {} finished".format(self.basename))
+            if self._is_page_download():
+                # Same logging as QtWebKit mhtml downloads.
+                log.downloads.debug("File successfully written.")
             self.successful = True
             self.done = True
             self.finished.emit()
@@ -137,16 +145,26 @@ def _get_suggested_filename(path):
     """
     filename = os.path.basename(path)
     filename = re.sub(r'\([0-9]+\)$', '', filename)
-    # https://bugreports.qt.io/browse/QTBUG-58155
-    filename = urllib.parse.unquote(filename)
-    # Doing basename a *second* time because there could be a %2F in there...
-    filename = os.path.basename(filename)
+    if not qtutils.version_check('5.8.1'):
+        # https://bugreports.qt.io/browse/QTBUG-58155
+        filename = urllib.parse.unquote(filename)
+        # Doing basename a *second* time because there could be a %2F in
+        # there...
+        filename = os.path.basename(filename)
     return filename
 
 
 class DownloadManager(downloads.AbstractDownloadManager):
 
-    """Manager for currently running downloads."""
+    """Manager for currently running downloads.
+
+    Attributes:
+        _mhtml_target: DownloadTarget for the next MHTML download.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._mhtml_target = None
 
     def install(self, profile):
         """Set up the download manager on a QWebEngineProfile."""
@@ -161,6 +179,11 @@ class DownloadManager(downloads.AbstractDownloadManager):
         download = DownloadItem(qt_item)
         self._init_item(download, auto_remove=False,
                         suggested_filename=suggested_filename)
+
+        if self._mhtml_target is not None:
+            download.set_target(self._mhtml_target)
+            self._mhtml_target = None
+            return
 
         filename = downloads.immediate_download_path()
         if filename is not None:
@@ -178,3 +201,10 @@ class DownloadManager(downloads.AbstractDownloadManager):
         message.global_bridge.ask(question, blocking=True)
         # The filename is set via the question.answered signal, connected in
         # _init_filename_question.
+
+    def get_mhtml(self, tab, target):
+        """Download the given tab as mhtml to the given target."""
+        assert tab.backend == usertypes.Backend.QtWebEngine
+        assert self._mhtml_target is None, self._mhtml_target
+        self._mhtml_target = target
+        tab.action.save_page()

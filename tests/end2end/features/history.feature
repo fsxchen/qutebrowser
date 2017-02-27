@@ -4,7 +4,7 @@ Feature: Page history
 
     Background:
         Given I open about:blank
-        And I run :history-clear
+        And I run :history-clear --force
 
     Scenario: Simple history saving
         When I open data/numbers/1.txt
@@ -57,7 +57,14 @@ Feature: Page history
 
     Scenario: Clearing history
         When I open data/title.html
+        And I run :history-clear --force
+        Then the history file should be empty
+
+    Scenario: Clearing history with confirmation
+        When I open data/title.html
         And I run :history-clear
+        And I wait for "Asking question <* title='Clear all browsing history?'>, *" in the log
+        And I run :prompt-accept yes
         Then the history file should be empty
 
     Scenario: History with yanked URL and 'add to history' flag
@@ -67,9 +74,16 @@ Feature: Page history
             http://localhost:(port)/data/hints/html/simple.html Simple link
             http://localhost:(port)/data/hello.txt
 
+    Scenario: Listing history
+        When I open data/numbers/3.txt
+        And I open data/numbers/4.txt
+        And I open qute:history
+        Then the page should contain the plaintext "3.txt"
+        Then the page should contain the plaintext "4.txt"
+
     ## Bugs
 
-    @qtwebengine_skip
+    @qtwebengine_skip @qtwebkit_ng_skip
     Scenario: Opening a valid URL which turns out invalid
         When I set general -> auto-search to true
         And I run :open http://foo%40bar@baz
