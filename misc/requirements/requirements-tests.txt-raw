@@ -1,11 +1,12 @@
 beautifulsoup4
-CherryPy
+cheroot
 coverage
 Flask
 httpbin
 hypothesis
-pytest!=3.0.5
+pytest
 pytest-bdd
+pytest-benchmark
 pytest-catchlog
 pytest-cov
 pytest-faulthandler
@@ -20,4 +21,3 @@ pytest-xvfb
 vulture
 
 #@ ignore: Jinja2, MarkupSafe
-#@ filter: pytest != 3.0.5

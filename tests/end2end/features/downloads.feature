@@ -100,7 +100,7 @@ Feature: Downloading things from a website.
         And I run :close
         Then qutebrowser should quit
 
-    # https://github.com/The-Compiler/qutebrowser/issues/2134
+    # https://github.com/qutebrowser/qutebrowser/issues/2134
     @qtwebengine_skip
     Scenario: Downloading, then closing a tab
         When I set storage -> prompt-download-directory to false
@@ -111,7 +111,7 @@ Feature: Downloading things from a website.
         And I wait for "fetch: * -> drip" in the log
         And I run :tab-close
         And I wait for "Download drip finished" in the log
-        Then the downloaded file drip should contain 128 bytes
+        Then the downloaded file drip should be 128 bytes big
 
     Scenario: Downloading a file with spaces
         When I open data/downloads/download with spaces.bin without waiting
@@ -197,35 +197,42 @@ Feature: Downloading things from a website.
 
     ## mhtml downloads
 
-    @qtwebengine_todo: :download --mhtml is not implemented yet
     Scenario: Downloading as mhtml is available
-        When I open html
+        When I open data/title.html
         And I run :download --mhtml
         And I wait for "File successfully written." in the log
-        Then no crash should happen
+        Then the downloaded file Test title.mhtml should exist
 
-    @qtwebengine_todo: :download --mhtml is not implemented yet
+    @qtwebengine_skip: QtWebEngine refuses to load this
     Scenario: Downloading as mhtml with non-ASCII headers
         When I open response-headers?Content-Type=text%2Fpl%C3%A4in
-        And I run :download --mhtml --dest mhtml-response-headers.mht
+        And I run :download --mhtml --dest mhtml-response-headers.mhtml
         And I wait for "File successfully written." in the log
-        Then no crash should happen
+        Then the downloaded file mhtml-response-headers.mhtml should exist
 
-    @qtwebengine_todo: :download --mhtml is not implemented yet
+    @qtwebengine_skip: https://github.com/qutebrowser/qutebrowser/issues/2288
     Scenario: Overwriting existing mhtml file
         When I set storage -> prompt-download-directory to true
-        And I open html
+        And I open data/title.html
         And I run :download --mhtml
-        And I wait for "Asking question <qutebrowser.utils.usertypes.Question default='*' mode=<PromptMode.text: 2> text='Please enter a location for <b>http://localhost:*/html</b>' title='Save file to:'>, *" in the log
+        And I wait for "Asking question <qutebrowser.utils.usertypes.Question default='*' mode=<PromptMode.download: 5> text='Please enter a location for <b>http://localhost:*/data/title.html</b>' title='Save file to:'>, *" in the log
         And I run :prompt-accept
         And I wait for "File successfully written." in the log
         And I run :download --mhtml
-        And I wait for "Asking question <qutebrowser.utils.usertypes.Question default='*' mode=<PromptMode.text: 2> text='Please enter a location for <b>http://localhost:*/html</b>' title='Save file to:'>, *" in the log
+        And I wait for "Asking question <qutebrowser.utils.usertypes.Question default='*' mode=<PromptMode.download: 5> text='Please enter a location for <b>http://localhost:*/data/title.html</b>' title='Save file to:'>, *" in the log
         And I run :prompt-accept
         And I wait for "Asking question <qutebrowser.utils.usertypes.Question default=None mode=<PromptMode.yesno: 1> text='<b>*</b> already exists. Overwrite?' title='Overwrite existing file?'>, *" in the log
         And I run :prompt-accept yes
         And I wait for "File successfully written." in the log
-        Then no crash should happen
+        Then the downloaded file Test title.mhtml should exist
+
+    Scenario: Opening a mhtml download directly
+        When I set storage -> prompt-download-directory to true
+        And I open html
+        And I run :download --mhtml
+        And I wait for the download prompt for "*"
+        And I directly open the download
+        Then "Opening *.mhtml* with [*python*]" should be logged
 
     ## :download-cancel
 
@@ -261,7 +268,7 @@ Feature: Downloading things from a website.
         Then "cancelled" should be logged
         And "cancelled" should be logged
 
-    # https://github.com/The-Compiler/qutebrowser/issues/1535
+    # https://github.com/qutebrowser/qutebrowser/issues/1535
     @qtwebengine_todo: :download --mhtml is not implemented yet
     Scenario: Cancelling an MHTML download (issue 1535)
         When I open data/downloads/issue1535.html
@@ -383,7 +390,7 @@ Feature: Downloading things from a website.
         And I wait until the download is finished
         Then "Opening *download.bin* with [*python*]" should be logged
 
-    # https://github.com/The-Compiler/qutebrowser/issues/1728
+    # https://github.com/qutebrowser/qutebrowser/issues/1728
 
     Scenario: Cancelling a download that should be opened
         When I set storage -> prompt-download-directory to true
@@ -393,7 +400,7 @@ Feature: Downloading things from a website.
         And I run :download-cancel
         Then "* finished but not successful, not opening!" should be logged
 
-    # https://github.com/The-Compiler/qutebrowser/issues/1725
+    # https://github.com/qutebrowser/qutebrowser/issues/1725
 
     Scenario: Directly open a download with a very long filename
         When I set storage -> prompt-download-directory to true
@@ -446,7 +453,7 @@ Feature: Downloading things from a website.
         And I open data/downloads/download2.bin without waiting
         Then the download prompt should be shown with "(tmpdir)/downloads/download2.bin"
 
-    # https://github.com/The-Compiler/qutebrowser/issues/2173
+    # https://github.com/qutebrowser/qutebrowser/issues/2173
 
     Scenario: Remembering the temporary download directory (issue 2173)
         When I set storage -> prompt-download-directory to true
@@ -454,7 +461,7 @@ Feature: Downloading things from a website.
         And I set storage -> remember-download-directory to true
         And I open data/downloads/download.bin without waiting
         And I wait for the download prompt for "*"
-        And I run :prompt-accept (tmpdir)/downloads
+        And I run :prompt-accept (tmpdir)(dirsep)downloads
         And I open data/downloads/download.bin without waiting
         And I wait for the download prompt for "*"
         And I directly open the download
@@ -470,7 +477,7 @@ Feature: Downloading things from a website.
         And I run :download http://localhost:(port)/data/downloads/download2.bin --dest download.bin
         And I wait for "Entering mode KeyMode.yesno *" in the log
         And I run :prompt-accept no
-        Then the downloaded file download.bin should contain 1 bytes
+        Then the downloaded file download.bin should be 1 bytes big
 
     Scenario: Overwriting an existing file
         When I set storage -> prompt-download-directory to false
@@ -480,7 +487,7 @@ Feature: Downloading things from a website.
         And I wait for "Entering mode KeyMode.yesno *" in the log
         And I run :prompt-accept yes
         And I wait until the download is finished
-        Then the downloaded file download.bin should contain 2 bytes
+        Then the downloaded file download.bin should be 2 bytes big
 
     @linux
     Scenario: Not overwriting a special file
@@ -535,7 +542,7 @@ Feature: Downloading things from a website.
         When I set storage -> prompt-download-directory to false
         And I run :download http://localhost:(port)/custom/twenty-mb
         And I wait until the download is finished
-        Then the downloaded file twenty-mb should contain 20971520 bytes
+        Then the downloaded file twenty-mb should be 20971520 bytes big
 
     Scenario: Downloading 20MB file with late prompt confirmation
         When I set storage -> prompt-download-directory to true
@@ -543,7 +550,7 @@ Feature: Downloading things from a website.
         And I wait 1s
         And I run :prompt-accept
         And I wait until the download is finished
-        Then the downloaded file twenty-mb should contain 20971520 bytes
+        Then the downloaded file twenty-mb should be 20971520 bytes big
 
     Scenario: Downloading invalid URL
         When I set storage -> prompt-download-directory to false
@@ -551,7 +558,7 @@ Feature: Downloading things from a website.
         And I run :download foo!
         Then the error "Invalid URL" should be shown
 
-    @qtwebengine_todo: pdfjs is not implemented yet
+    @qtwebengine_todo: pdfjs is not implemented yet @qtwebkit_ng_xfail: https://github.com/annulen/webkit/issues/428
     Scenario: Downloading via pdfjs
         Given pdfjs is available
         When I set storage -> prompt-download-directory to false
@@ -579,3 +586,20 @@ Feature: Downloading things from a website.
        And I open stream-bytes/1024 without waiting
        And I wait until the download is finished
        Then the downloaded file 1024 should exist
+
+    @qtwebengine_skip: We can't get the UA from the page there
+    Scenario: user-agent when using :download
+        When I open user-agent
+        And I run :download
+        And I wait until the download is finished
+        Then the downloaded file user-agent should contain Safari/
+
+    @qtwebengine_skip: We can't get the UA from the page there
+    Scenario: user-agent when using hints
+        When I set hints -> mode to number
+        And I open /
+        And I run :hint links download
+        And I press the keys "us"  # user-agent
+        And I run :follow-hint 0
+        And I wait until the download is finished
+        Then the downloaded file user-agent should contain Safari/

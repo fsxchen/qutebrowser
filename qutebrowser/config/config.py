@@ -43,6 +43,7 @@ from qutebrowser.config.parsers import ini
 from qutebrowser.commands import cmdexc, cmdutils
 from qutebrowser.utils import (message, objreg, utils, standarddir, log,
                                qtutils, error, usertypes)
+from qutebrowser.misc import objects
 from qutebrowser.utils.usertypes import Completion
 
 
@@ -233,7 +234,7 @@ def _init_misc():
     # doesn't overwrite our config.
     #
     # This fixes one of the corruption issues here:
-    # https://github.com/The-Compiler/qutebrowser/issues/515
+    # https://github.com/qutebrowser/qutebrowser/issues/515
 
     path = os.path.join(standarddir.config(), 'qsettings')
     for fmt in [QSettings.NativeFormat, QSettings.IniFormat]:
@@ -442,6 +443,7 @@ class ConfigManager(QObject):
                 'html > ::-webkit-scrollbar { width: 0px; height: 0px; }': '',
                 '::-webkit-scrollbar { width: 0px; height: 0px; }': '',
             }),
+        ('contents', 'cache-size'): _get_value_transformer({'52428800': ''}),
     }
 
     changed = pyqtSignal(str, str)
@@ -882,10 +884,9 @@ class ConfigManager(QObject):
                 # Will be handled later in .setv()
                 pass
             else:
-                backend = usertypes.arg2backend[objreg.get('args').backend]
                 if (allowed_backends is not None and
-                        backend not in allowed_backends):
-                    raise configexc.BackendError(backend)
+                        objects.backend not in allowed_backends):
+                    raise configexc.BackendError(objects.backend)
         else:
             interpolated = None
 

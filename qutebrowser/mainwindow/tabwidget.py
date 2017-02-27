@@ -29,6 +29,7 @@ from PyQt5.QtGui import QIcon, QPalette, QColor
 
 from qutebrowser.utils import qtutils, objreg, utils, usertypes, log
 from qutebrowser.config import config
+from qutebrowser.misc import objects
 
 
 PixelMetrics = usertypes.enum('PixelMetrics', ['icon_padding'],
@@ -124,7 +125,7 @@ class TabWidget(QTabWidget):
         fields['title'] = page_title
         fields['title_sep'] = ' - ' if page_title else ''
         fields['perc_raw'] = tab.progress()
-        fields['backend'] = objreg.get('args').backend
+        fields['backend'] = objects.backend.name
 
         if tab.load_status() == usertypes.LoadStatus.loading:
             fields['perc'] = '[{}%] '.format(tab.progress())
@@ -253,11 +254,13 @@ class TabBar(QTabBar):
     fixing this would be a lot of effort, so we'll postpone it until we're
     reimplementing drag&drop for other reasons.
 
-    https://github.com/The-Compiler/qutebrowser/issues/126
+    https://github.com/qutebrowser/qutebrowser/issues/126
 
     Attributes:
         vertical: When the tab bar is currently vertical.
         win_id: The window ID this TabBar belongs to.
+        _page_fullscreen: Whether the webpage (e.g. a video) is shown
+                          fullscreen.
     """
 
     def __init__(self, win_id, parent=None):
@@ -268,6 +271,7 @@ class TabBar(QTabBar):
         config_obj = objreg.get('config')
         config_obj.changed.connect(self.set_font)
         self.vertical = False
+        self._page_fullscreen = False
         self._auto_hide_timer = QTimer()
         self._auto_hide_timer.setSingleShot(True)
         self._auto_hide_timer.setInterval(
@@ -295,20 +299,24 @@ class TabBar(QTabBar):
         self._auto_hide_timer.setInterval(
             config.get('tabs', 'show-switching-delay'))
 
+    @pyqtSlot(bool)
+    def on_page_fullscreen_requested(self, on):
+        self._page_fullscreen = on
+        self._tabhide()
+
     def on_change(self):
         """Show tab bar when current tab got changed."""
         show = config.get('tabs', 'show')
-        if show == 'switching':
+        if show == 'switching' or self._page_fullscreen:
             self.show()
             self._auto_hide_timer.start()
 
     def _tabhide(self):
         """Hide the tab bar if needed."""
         show = config.get('tabs', 'show')
-        show_never = show == 'never'
-        switching = show == 'switching'
-        multiple = show == 'multiple'
-        if show_never or (multiple and self.count() == 1) or switching:
+        if (show in ['never', 'switching'] or
+                (show == 'multiple' and self.count() == 1) or
+                self._page_fullscreen):
             self.hide()
         else:
             self.show()
@@ -606,6 +614,12 @@ class TabBarStyle(QCommonStyle):
             p: QPainter
             widget: QWidget
         """
+        if element not in [QStyle.CE_TabBarTab, QStyle.CE_TabBarTabShape,
+                           QStyle.CE_TabBarTabLabel]:
+            # Let the real style draw it.
+            self._style.drawControl(element, opt, p, widget)
+            return
+
         layouts = self._tab_layout(opt)
         if layouts is None:
             log.misc.warning("Could not get layouts for tab!")
@@ -630,9 +644,7 @@ class TabBarStyle(QCommonStyle):
                                      opt.state & QStyle.State_Enabled,
                                      opt.text, QPalette.WindowText)
         else:
-            # For any other elements we just delegate the work to our real
-            # style.
-            self._style.drawControl(element, opt, p, widget)
+            raise ValueError("Invalid element {!r}".format(element))
 
     def pixelMetric(self, metric, option=None, widget=None):
         """Override pixelMetric to not shift the selected tab.

@@ -35,7 +35,7 @@ from qutebrowser.config import configtypes as typ
 from qutebrowser.config import sections as sect
 from qutebrowser.config.value import SettingValue
 from qutebrowser.utils.qtutils import MAXVALS
-from qutebrowser.utils import usertypes
+from qutebrowser.utils import usertypes, qtutils
 
 
 FIRST_COMMENT = r"""
@@ -200,9 +200,12 @@ def data(readonly=False):
 
             ('print-element-backgrounds',
              SettingValue(typ.Bool(), 'true',
-                          backends=[usertypes.Backend.QtWebKit]),
+                          backends=(None if qtutils.version_check('5.8')
+                                    else [usertypes.Backend.QtWebKit])),
              "Whether the background color and images are also drawn when the "
-             "page is printed."),
+             "page is printed.\n"
+             "This setting only works with Qt 5.8 or newer when using the "
+             "QtWebEngine backend."),
 
             ('xss-auditing',
              SettingValue(typ.Bool(), 'false'),
@@ -215,7 +218,7 @@ def data(readonly=False):
             ('site-specific-quirks',
              SettingValue(typ.Bool(), 'true',
                           backends=[usertypes.Backend.QtWebKit]),
-             "Enable workarounds for broken sites."),
+             "Enable QtWebKit workarounds for broken sites."),
 
             ('default-encoding',
              SettingValue(typ.String(none_ok=True), ''),
@@ -433,10 +436,13 @@ def data(readonly=False):
 
             ('proxy',
              SettingValue(typ.Proxy(), 'system',
-                          backends=[usertypes.Backend.QtWebKit]),
+                          backends=(None if qtutils.version_check('5.8')
+                                    else [usertypes.Backend.QtWebKit])),
              "The proxy to use.\n\n"
              "In addition to the listed values, you can use a `socks://...` "
-             "or `http://...` URL."),
+             "or `http://...` URL.\n\n"
+             "This setting only works with Qt 5.8 or newer when using the "
+             "QtWebEngine backend."),
 
             ('proxy-dns-requests',
              SettingValue(typ.Bool(), 'true',
@@ -583,7 +589,7 @@ def data(readonly=False):
              "disables the context menu."),
 
             ('mouse-zoom-divider',
-             SettingValue(typ.Int(minval=1), '512'),
+             SettingValue(typ.Int(minval=0), '512'),
              "How much to divide the mouse wheel movements to translate them "
              "into zoom increments."),
 
@@ -792,9 +798,10 @@ def data(readonly=False):
              "enabled."),
 
             ('cache-size',
-             SettingValue(typ.Int(minval=0, maxval=MAXVALS['int64']),
-                          '52428800'),
-             "Size of the HTTP network cache."),
+             SettingValue(typ.Int(none_ok=True, minval=0,
+                                  maxval=MAXVALS['int64']), ''),
+             "Size of the HTTP network cache. Empty to use the default "
+             "value."),
 
             readonly=readonly
         )),
@@ -815,9 +822,8 @@ def data(readonly=False):
              "are not affected by this setting."),
 
             ('webgl',
-             SettingValue(typ.Bool(), 'false'),
-             "Enables or disables WebGL. For QtWebEngine, Qt/PyQt >= 5.7 is "
-             "required for this setting."),
+             SettingValue(typ.Bool(), 'true'),
+             "Enables or disables WebGL."),
 
             ('css-regions',
              SettingValue(typ.Bool(), 'true',
@@ -888,9 +894,9 @@ def data(readonly=False):
              "Control which cookies to accept."),
 
             ('cookies-store',
-             SettingValue(typ.Bool(), 'true',
-                          backends=[usertypes.Backend.QtWebKit]),
-             "Whether to store cookies."),
+             SettingValue(typ.Bool(), 'true'),
+             "Whether to store cookies. Note this option needs a restart with "
+             "QtWebEngine."),
 
             ('host-block-lists',
              SettingValue(
@@ -936,7 +942,9 @@ def data(readonly=False):
             ('mode',
              SettingValue(typ.String(
                  valid_values=typ.ValidValues(
-                     ('number', "Use numeric hints."),
+                     ('number', "Use numeric hints. (In this mode you can "
+                      "also type letters form the hinted element to filter "
+                      "and reduce the number of elements that are hinted.)"),
                      ('letter', "Use the chars in the hints -> "
                       "chars setting."),
                      ('word', "Use hints words based on the html "
@@ -1268,8 +1276,7 @@ def data(readonly=False):
              "Background color for downloads with errors."),
 
             ('webpage.bg',
-             SettingValue(typ.QtColor(none_ok=True), 'white',
-                          backends=[usertypes.Backend.QtWebKit]),
+             SettingValue(typ.QtColor(none_ok=True), 'white'),
              "Background color for webpages if unset (or empty to use the "
              "theme's color)"),
 
@@ -1543,7 +1550,8 @@ KEY_DATA = collections.OrderedDict([
     ])),
 
     ('normal', collections.OrderedDict([
-        ('clear-keychain ;; search', ['<Escape>']),
+        ('clear-keychain ;; search ;; fullscreen --leave',
+            ['<Escape>', '<Ctrl-[>']),
         ('set-cmd-text -s :open', ['o']),
         ('set-cmd-text :open {url:pretty}', ['go']),
         ('set-cmd-text -s :open -t', ['O']),
@@ -1763,8 +1771,12 @@ CHANGED_KEY_COMMANDS = [
     (re.compile(r'^download-page$'), r'download'),
     (re.compile(r'^cancel-download$'), r'download-cancel'),
 
-    (re.compile(r"""^search (''|"")$"""), r'clear-keychain ;; search'),
-    (re.compile(r'^search$'), r'clear-keychain ;; search'),
+    (re.compile(r"""^search (''|"")$"""),
+        r'clear-keychain ;; search ;; fullscreen --leave'),
+    (re.compile(r'^search$'),
+        r'clear-keychain ;; search ;; fullscreen --leave'),
+    (re.compile(r'^clear-keychain ;; search$'),
+        r'clear-keychain ;; search ;; fullscreen --leave'),
 
     (re.compile(r"""^set-cmd-text ['"](.*) ['"]$"""), r'set-cmd-text -s \1'),
     (re.compile(r"""^set-cmd-text ['"](.*)['"]$"""), r'set-cmd-text \1'),
@@ -1778,7 +1790,8 @@ CHANGED_KEY_COMMANDS = [
     (re.compile(r'^scroll 50 0$'), r'scroll right'),
     (re.compile(r'^scroll ([-\d]+ [-\d]+)$'), r'scroll-px \1'),
 
-    (re.compile(r'^search *;; *clear-keychain$'), r'clear-keychain ;; search'),
+    (re.compile(r'^search *;; *clear-keychain$'),
+        r'clear-keychain ;; search ;; fullscreen --leave'),
     (re.compile(r'^clear-keychain *;; *leave-mode$'), r'leave-mode'),
 
     (re.compile(r'^download-remove --all$'), r'download-clear'),

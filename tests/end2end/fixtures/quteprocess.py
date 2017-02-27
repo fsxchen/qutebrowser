@@ -58,10 +58,22 @@ def is_ignored_lowlevel_message(message):
     if 'Running without the SUID sandbox!' in message:
         return True
     elif message.startswith('Xlib: sequence lost'):
-        # https://travis-ci.org/The-Compiler/qutebrowser/jobs/157941720
+        # https://travis-ci.org/qutebrowser/qutebrowser/jobs/157941720
         # ???
         return True
     elif 'CERT_PKIXVerifyCert for localhost failed' in message:
+        return True
+    elif 'Invalid node channel message' in message:
+        # Started appearing in sessions.feature with Qt 5.8...
+        return True
+    elif ("_dl_allocate_tls_init: Assertion `listp->slotinfo[cnt].gen <= "
+          "GL(dl_tls_generation)' failed!" in message):
+        # Started appearing with Qt 5.8...
+        # http://patchwork.sourceware.org/patch/10255/
+        return True
+    elif ("CreatePlatformSocket() returned an error, errno=97: Address family "
+          "not supported by protocol" in message):
+        # Makes tests fail on Quantumcross' machine
         return True
     return False
 
@@ -196,13 +208,17 @@ class QuteProc(testprocess.Process):
         start_okay_message_load = (
             "load status for <qutebrowser.browser.* tab_id=0 "
             "url='about:blank'>: LoadStatus.success")
-        start_okay_message_focus = (
+        start_okay_messages_focus = [
+            # QtWebKit
             "Focus object changed: "
-            "<qutebrowser.browser.* tab_id=0 url='about:blank'>")
-        # With QtWebEngine the QOpenGLWidget has the actual focus
-        start_okay_message_focus_qtwe = (
-            "Focus object changed: <PyQt5.QtWidgets.QOpenGLWidget object at *>"
-        )
+            "<qutebrowser.browser.* tab_id=0 url='about:blank'>",
+            # QtWebEngine
+            "Focus object changed: "
+            "<PyQt5.QtWidgets.QOpenGLWidget object at *>",
+            # QtWebEngine with Qt >= 5.8
+            "Focus object changed: "
+            "<PyQt5.QtGui.QWindow object at *>",
+        ]
 
         if (log_line.category == 'ipc' and
                 log_line.message.startswith("Listening as ")):
@@ -213,13 +229,9 @@ class QuteProc(testprocess.Process):
             if not self._load_ready:
                 log_line.waited_for = True
             self._is_ready('load')
-        elif (log_line.category == 'misc' and
-              testutils.pattern_match(pattern=start_okay_message_focus,
-                                      value=log_line.message)):
-            self._is_ready('focus')
-        elif (log_line.category == 'misc' and
-              testutils.pattern_match(pattern=start_okay_message_focus_qtwe,
-                                      value=log_line.message)):
+        elif log_line.category == 'misc' and any(testutils.pattern_match(
+                pattern=pattern, value=log_line.message) for pattern in
+                start_okay_messages_focus):
             self._is_ready('focus')
         elif (log_line.category == 'init' and
               log_line.module == 'standarddir' and
@@ -236,7 +248,9 @@ class QuteProc(testprocess.Process):
             if not line.strip():
                 return None
             elif (is_ignored_qt_message(line) or
-                  is_ignored_lowlevel_message(line)):
+                  is_ignored_lowlevel_message(line) or
+                  self.request.node.get_marker('no_invalid_lines')):
+                self._log("IGNORED: {}".format(line))
                 return None
             else:
                 raise
@@ -287,7 +301,8 @@ class QuteProc(testprocess.Process):
         URLs like about:... and qute:... are handled specially and returned
         verbatim.
         """
-        if path.startswith('about:') or path.startswith('qute:'):
+        special_schemes = ['about:', 'qute:', 'chrome:']
+        if any(path.startswith(scheme) for scheme in special_schemes):
             return path
         else:
             httpbin = self.request.getfixturevalue('httpbin')
@@ -319,13 +334,6 @@ class QuteProc(testprocess.Process):
         if (x is None and y is not None) or (y is None and x is not None):
             raise ValueError("Either both x/y or neither must be given!")
 
-        if self.request.config.webengine:
-            # pylint: disable=no-name-in-module,useless-suppression
-            from PyQt5.QtWebEngineWidgets import QWebEnginePage
-            # pylint: enable=no-name-in-module,useless-suppression
-            if not hasattr(QWebEnginePage, 'scrollPositionChanged'):
-                # Qt < 5.7
-                pytest.skip("QWebEnginePage.scrollPositionChanged missing")
         if x is None and y is None:
             point = 'PyQt5.QtCore.QPoint(*, *)'  # not counting 0/0 here
         elif x == '0' and y == '0':
