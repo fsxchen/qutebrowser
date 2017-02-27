@@ -1,3 +1,9 @@
+qutebrowser (0.10.0-1) UNRELEASED; urgency=medium
+
+  * New upstream release.
+
+ -- Mateusz Łukasik <mati75@linuxmint.pl>  Mon, 27 Feb 2017 14:22:52 +0100
+
 qutebrowser (0.9.1-1) unstable; urgency=medium
 
   * New upstream release.
